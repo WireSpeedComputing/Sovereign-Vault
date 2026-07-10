@@ -59,6 +59,9 @@ sql/05_perimeter_assert.sql  Phase 1: perimeter check covering BOTH table grants
                               and function grants (Supabase auto-grants SELECT
                               to anon/authenticated on new public tables by
                               default; function-only checks miss it)
+sql/06_import.sql            import framework: preserve-then-normalize,
+                              import batches, raw artifacts, human-gated
+                              promotion, cutover scorecard
 docs/01-architecture.md      concepts, "bring your own schema" contract for
                               domain tables, temporal/supersede pattern template
 docs/02-onboarding-principals.md   template for registering humans and agents
