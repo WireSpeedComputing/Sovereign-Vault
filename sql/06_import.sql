@@ -14,6 +14,31 @@
 -- (or a human-reviewed flagging pass) promotes to 'current'. Agents cannot
 -- promote — that's enforced by 03_provenance.sql already.
 
+-- Classification (adopted from the author's personal-core methodology,
+-- docs/07-source-import-cutover.md): every landed artifact gets an explicit
+-- action, not a binary normalize/skip. 'evidence' matters most: process
+-- records like model-to-model messages, migration logs, and scratchpads are
+-- preserved and auditable but must NOT automatically become user memory.
+create type import_action as enum ('import', 'hold', 'exclude', 'evidence');
+create type import_zone   as enum ('house', 'vault', 'hold', 'evidence');
+
+-- ── Freeze / watermark control ───────────────────────────────────────────
+-- Prevent the prior source from changing invisibly during export. Record
+-- the source's high-water marks BEFORE export; reconciliation is against
+-- these numbers, not against a moving target.
+create table source_freeze (
+  id            uuid primary key default gen_random_uuid(),
+  source_system text not null,
+  batch_id      uuid,                    -- FK added after import_batches exists
+  freeze_mode   text not null check (freeze_mode in ('hard_freeze','watermark','dual_write','read_only')),
+  frozen_at     timestamptz not null default now(),
+  actor         uuid,                    -- principal who declared the freeze
+  source_count  integer,
+  source_max_ts timestamptz,
+  source_hash   text,
+  notes         text
+);
+
 -- ── Batches: one row per import run ─────────────────────────────────────
 create table import_batches (
   id            uuid primary key default gen_random_uuid(),
@@ -37,13 +62,20 @@ create table raw_artifacts (
   payload_sha256 text not null,         -- hash of the canonical payload text, computed at landing
   fetched_at    timestamptz not null default now(),
   normalized_at timestamptz,            -- set when a normalization pass has consumed this artifact
-  skipped       boolean not null default false,
-  skip_reason   text,
+  action        import_action,          -- null until classified; classification is explicit, never defaulted
+  zone          import_zone,
+  action_reason text,
+  reviewed_by   uuid,
+  reviewed_at   timestamptz,
   unique (source_system, source_id)     -- re-running an import cannot double-land an artifact
 );
 
+alter table source_freeze add constraint source_freeze_batch_fk
+  foreign key (batch_id) references import_batches(id);
+
 create index on raw_artifacts (batch_id);
-create index on raw_artifacts (source_system) where normalized_at is null and not skipped;
+create index on raw_artifacts (source_system) where normalized_at is null;
+create index on raw_artifacts (action) where action is not null;
 
 -- ── Linkage: knowledge rows remember which raw artifact they came from ───
 alter table memories   add column source_artifact_id uuid references raw_artifacts(id);
@@ -88,14 +120,23 @@ select
   count(distinct b.id)                                        as batches,
   max(b.expected_count)                                       as last_expected,
   count(ra.id)                                                as landed,
-  count(ra.id) filter (where ra.normalized_at is not null)    as normalized,
-  count(ra.id) filter (where ra.skipped)                      as skipped,
-  count(ra.id) filter (where ra.normalized_at is null
-                         and not ra.skipped)                  as unaccounted,
+  count(ra.id) filter (where ra.action is null)               as unclassified,
+  count(ra.id) filter (where ra.action = 'import')            as to_import,
+  count(ra.id) filter (where ra.action = 'import'
+                         and ra.normalized_at is null)        as import_pending,
+  count(ra.id) filter (where ra.action = 'hold')              as held,
+  count(ra.id) filter (where ra.action = 'exclude')           as excluded,
+  count(ra.id) filter (where ra.action = 'evidence')          as evidence,
   count(m.id)  filter (where m.status = 'proposed')           as still_proposed,
-  (count(ra.id) filter (where ra.normalized_at is null and not ra.skipped) = 0
-   and count(m.id) filter (where m.status = 'proposed') = 0
-   and count(ra.id) >= coalesce(max(b.expected_count), 0))    as sunset_ready
+  -- Sunset requires: everything landed, everything classified, every
+  -- 'import' normalized, nothing proposed left unreviewed, and holds are
+  -- deliberate (held > 0 does NOT block sunset -- holds are an explicit
+  -- decision -- but unclassified does).
+  (count(ra.id) >= coalesce(max(b.expected_count), 0)
+   and count(ra.id) filter (where ra.action is null) = 0
+   and count(ra.id) filter (where ra.action = 'import'
+                              and ra.normalized_at is null) = 0
+   and count(m.id) filter (where m.status = 'proposed') = 0)  as sunset_ready
 from import_batches b
 left join raw_artifacts ra on ra.batch_id = b.id
 left join memories m on m.source_artifact_id = ra.id
@@ -104,5 +145,6 @@ group by b.source_system;
 -- ── Lockdown ─────────────────────────────────────────────────────────────
 alter table import_batches enable row level security;
 alter table raw_artifacts  enable row level security;
-revoke all on import_batches, raw_artifacts from anon, authenticated;
+alter table source_freeze  enable row level security;
+revoke all on import_batches, raw_artifacts, source_freeze from anon, authenticated;
 alter function promote_memory(uuid, uuid) set search_path = public;
