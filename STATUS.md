@@ -1,9 +1,70 @@
 # STATUS
 
-Last updated: 2026-07-08. Phase 0 and Phase 1 SQL were applied to a real
+Last updated: 2026-07-10. Phase 0 and Phase 1 SQL were applied to a real
 PostgreSQL 16 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance
 tests were executed for real, not just reasoned about. Results below. This
-was NOT tested against Supabase specifically — see "Not yet tested."
+was NOT tested against Supabase at that time — see "Not yet tested" (2026-07-08
+version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Postgres 17 / Supabase validation — APPLIED AND VERIFIED (2026-07-10)
+
+`sql/00` through `sql/06` were applied in order, via migration, to a real
+Supabase project running Postgres 17.6. All seven files applied clean —
+zero PG17-specific errors, no fix-forward needed for the 00-06 set.
+
+All 8 Phase 1 acceptance tests plus 4 import-framework tests (raw_artifacts
+dedup, source_artifact_id linkage, promote_memory human-gating including the
+agent-rejected and non-proposed-rejected cases, and the sunset_ready
+regression check for the landed-less-than-expected case) were run for real
+against the live project, inside a transaction that was rolled back
+afterward so no test fixtures persist in the deployed database.
+
+**Two of the twenty tests failed on first run — both were the exact
+Supabase-specific gap this file's "Not yet tested" section predicted:**
+`perimeter_assert()` did not return zero rows, and table grants to
+anon/authenticated were not zero. Root cause: earlier migrations revoked
+grants table-by-table as each table was created, which reliably covers
+tables but misses (a) views, which get their own default-privilege grant
+independent of their base tables, and (b) any table accidentally left out
+of a REVOKE list by hand. Concretely: 4 views (capability_grants_active,
+deadlines_upcoming, import_cutover_scorecard, memory_hot_ranked) and
+1 table (schema_changelog) were exposed to anon/authenticated with full
+privileges (SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER) before
+this was caught.
+
+**Fixed forward, this session:** `sql/07_default_privileges.sql` —
+(1) `ALTER DEFAULT PRIVILEGES` for both tables and functions in `public`,
+so this class of gap cannot recur for anything created after this file
+runs, and (2) a one-time remediation sweep that revokes all grants on every
+table/view that already existed, closing the gap on the 5 objects above.
+Verified via the canary procedure the work order specified: a throwaway
+table and throwaway function with zero explicit revokes both showed up in
+`perimeter_assert()` before `sql/07`, zero grants after. Re-ran the full
+test battery after the fix — all 20 tests pass.
+
+**`sql/08_advisor_fixes.sql`** — Supabase's security advisor
+(`function_search_path_mutable`) caught one function, `log_ddl_change()`
+(the DDL changelog's event trigger function), that was missed when every
+other function in this repo got `set search_path = public`. Fixed and
+verified; advisor finding cleared on re-run.
+
+**Known residual gap, not fixed this session:** the function-level revoke
+in `sql/07` cannot reach functions owned by a different role than the one
+running the migration (Postgres silently no-ops a REVOKE the executing role
+lacks authority over — WARNING, not an error). On this Supabase project,
+~118 functions belonging to the `vector` and `pgcrypto` extensions are
+owned by `supabase_admin`, not the migration role, and still show EXECUTE
+granted to anon/authenticated. This is the advisor's `extension_in_public`
+finding (vector was installed with no schema, landing in `public`) — a
+structural fix (relocate the extension), not a privileges bug, and not
+something to force through without dedicated regression testing of vector
+operations afterward. Tracked as a GitHub issue rather than patched here.
+
+**Advisor triage in full:** 13× `rls_enabled_no_policy` (INFO) across every
+core table — expected and already documented below under "RLS policies...
+not written yet"; tracked as its own issue rather than 13. 1×
+`function_search_path_mutable` (WARN) — fixed, see above. 1×
+`extension_in_public` (WARN) — tracked as an issue, see above.
 
 ## Phase 0 — Core knowledge layer: APPLIED AND VERIFIED (vanilla Postgres 16)
 
@@ -47,14 +108,10 @@ something done.
 
 ## Not yet tested (explicitly still open)
 
-- **Not tested against Supabase specifically.** Supabase's Postgres has
-  additional preconfigured roles, extensions, and default-privilege behavior
-  (including auto-granting SELECT to anon/authenticated on new public
-  tables) that a vanilla PG16 instance does not reproduce exactly. Before
-  trusting this on a real Supabase project: run the same 8 tests there, and
-  additionally create a throwaway table with no explicit revokes and confirm
-  `perimeter_assert()` catches its auto-grants — that's the exact failure
-  mode this file exists to detect.
+- ~~Not tested against Supabase specifically.~~ **Done 2026-07-10** — see
+  "Postgres 17 / Supabase validation" above. The predicted failure mode
+  (auto-grants on new public tables) was real, found the same session it was
+  tested for, and closed with `sql/07_default_privileges.sql`.
 - **No upgrade path for an existing deployment.** This repo assumes a fresh
   database. A live deployment with its own migration history predating
   principals, capability grants, and provenance_basis needs a written,
