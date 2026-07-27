@@ -53,6 +53,16 @@ is unaffected; a general "no direct status mutation outside sanctioned
 functions" guard now also covers non-agent-sourced rows, which the original,
 narrower rule did not reach.
 
+**A fourth bug, caught by `get_advisors` after deployment, not by the tests
+above:** the new general bounded-status-mutation trigger function landed
+with `EXECUTE` granted to `anon`/`authenticated` — directly callable via
+`/rest/v1/rpc/`, despite being a trigger function with no legitimate direct
+caller. The existing blanket `ALTER DEFAULT PRIVILEGES` (`sql/07`) evidently
+does not reach every newly created function automatically. Fixed with an
+explicit `REVOKE`. Lesson: run `get_advisors` after *every* migration that
+adds a function, even ones "covered" by a standing default-privileges rule —
+don't treat that rule as a guarantee.
+
 **Honest limit, stated plainly and not just in this file:** under a single
 shared service-role key, this guard is accident-prevention and audit, not
 identity enforcement. Any caller sharing that connection can set the same
