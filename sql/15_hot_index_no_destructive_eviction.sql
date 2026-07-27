@@ -1,0 +1,19 @@
+-- Hot-index eviction defect (generic pattern): a hot/attention index must never DELETE a
+-- ranked row merely because a presentation-time row cap was reached during promotion of a
+-- new topic from staging into the index. Deleting to stay under a cap silently destroys
+-- history that a future model or a returning user might need.
+--
+-- Fix: remove any cap-check-and-delete step from the index-write path. Let the index table
+-- grow unbounded; apply the cap ONLY in the read-side ranking view/function (e.g. a
+-- `LIMIT 15` on a ranked view). The view is the cap; the table never deletes.
+--
+-- No backfill/migration is possible for rows already destructively evicted before this fix --
+-- that data is gone. Note any such loss window honestly rather than silently proceeding as if
+-- history were intact.
+--
+-- Before (defective): on promoting a staged topic into the index, if the index already has
+-- >= <cap> rows, SELECT the lowest-ranked row from the ranking view and DELETE it from the
+-- index table before inserting the new one.
+--
+-- After (fixed): insert the newly-promoted topic into the index unconditionally. Do not
+-- query the ranking view or delete anything as part of the write path.

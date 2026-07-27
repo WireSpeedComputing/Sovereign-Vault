@@ -1,0 +1,14 @@
+-- Whitespace-class rejection (generic pattern): reject all-whitespace values in required
+-- text columns (e.g. content, citation) using a real whitespace-class regex, not a
+-- btrim-only emptiness check. btrim() with no explicit character set strips spaces only --
+-- a value consisting solely of tabs and/or newlines would pass a btrim-based check while
+-- still being functionally empty.
+--
+-- CHECK (<column> !~ '^\s*$')
+--
+-- NULL values are unaffected -- a CHECK constraint treats NULL as satisfied, so this only
+-- rejects a NON-NULL value that is empty or all-whitespace. A nullable citation column
+-- remains optional; it just cannot be set to whitespace-only garbage.
+--
+-- Example:
+-- ALTER TABLE public.<table> ADD CONSTRAINT <table>_<column>_not_whitespace CHECK (<column> !~ '^\s*$');

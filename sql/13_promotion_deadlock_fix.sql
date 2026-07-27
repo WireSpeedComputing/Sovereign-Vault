@@ -1,0 +1,63 @@
+-- Promotion deadlock fix (generic pattern): a transaction-local GUC guard so a sanctioned
+-- promotion/supersession function can transition a record from proposed to current, while
+-- bare direct UPDATEs to that transition stay blocked outside those functions.
+--
+-- THE BUG: a human-gated promotion function performs the sanctioned status-mutating UPDATE
+-- itself, which can trip a provenance guard trigger meant to stop an agent from
+-- self-attesting a row to "current" status -- because the trigger cannot distinguish the
+-- sanctioned transition from a bare UPDATE attempting the same thing.
+--
+-- THE FIX: a transaction-local GUC (e.g. app.promoting) that the sanctioned function sets
+-- immediately before, and resets immediately after, its own guarded UPDATE. The provenance
+-- trigger allows the transition only while the guard is set.
+--
+-- IMPORTANT: SET LOCAL persists for the remainder of the CURRENT TRANSACTION, not just the
+-- one statement. If the guard is not reset immediately after use, a later bare UPDATE within
+-- the same multi-statement transaction would also slip through. Reset the guard back to 'off'
+-- right after the guarded statement, before the function returns.
+--
+-- HONEST LIMIT: under a single shared service-role key, this is accident-prevention and
+-- audit, NOT identity enforcement. Any caller sharing that connection can set the same GUC
+-- directly. Real enforcement requires per-principal connection identity, which this pattern
+-- does not provide.
+
+-- Example provenance-guard trigger function, updated to recognize the guarded transition:
+--
+-- CREATE OR REPLACE FUNCTION public.enforce_agent_cannot_self_attest()
+--  RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
+-- AS $function$
+-- begin
+--   if new.source_kind = 'agent' and new.provenance_basis = 'human_direct' then
+--     raise exception 'agent-sourced rows cannot claim human_direct provenance (row id: %)', new.id;
+--   end if;
+--   if new.source_kind = 'agent' and new.status = 'current' and new.provenance_basis is distinct from 'decision_record' then
+--     if TG_OP = 'UPDATE' and coalesce(current_setting('app.promoting', true), 'off') = 'on' then
+--       null; -- sanctioned promotion transition in progress, allow through
+--     else
+--       raise exception 'agent-sourced rows must have status = proposed unless provenance_basis = decision_record (row id: %)', new.id;
+--     end if;
+--   end if;
+--   return new;
+-- end; $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.enforce_bounded_status_transition()
+--  RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
+-- AS $function$
+-- begin
+--   if OLD.status is distinct from NEW.status then
+--     if coalesce(current_setting('app.promoting', true), 'off') <> 'on' then
+--       raise exception 'direct status mutation on %.% is not permitted outside sanctioned functions. row id: %, attempted % -> %',
+--         TG_TABLE_SCHEMA, TG_TABLE_NAME, NEW.id, OLD.status, NEW.status;
+--     end if;
+--   end if;
+--   return new;
+-- end; $function$;
+--
+-- CREATE TRIGGER trg_bounded_status BEFORE UPDATE ON public.<table> FOR EACH ROW EXECUTE FUNCTION public.enforce_bounded_status_transition();
+--
+-- Sanctioned function pattern (promote/supersede):
+--   ... validate promoter is an active human principal ...
+--   set local app.promoting = 'on';
+--   update <table> set status = 'current', ... where id = p_id;
+--   set local app.promoting = 'off';
+--   return 'promoted';
