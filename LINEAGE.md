@@ -36,6 +36,60 @@ transfer deliberately, via this document and direct review, not via git merge.
 - **Temporal truth** (`sql/04_temporal.sql`): a multi-user business needs
   "when was this true" answered independently of "when did we record it,"
   which single-principal personal use doesn't force.
+- **Transaction-local GUC guard for sanctioned status transitions**
+  (`sql/13_promotion_deadlock_fix.sql`): matches the reference deployment's
+  `guard_canonical_write()` / `app.allow_canonical_write` precedent, applied
+  here to the promotion/supersession path specifically (`app.promoting`)
+  rather than a general canonical-write gate. Found and fixed one gap the
+  reference pattern's description didn't call out: the guard must be reset
+  immediately after its guarded statement, not left set until transaction
+  end, or it silently covers later statements in the same transaction too.
+
+## Adopted, relayed from a 2026-07-27 cross-instance report (not this repo's own finding)
+
+The following four items were reported by the reference deployment's
+maintainers as defects found and fixed in their own July 25-27 rebuild,
+relayed as transferable design constraints rather than prescribed schema.
+Diffed against this repo's own ground truth before adopting; not adopted
+blindly.
+
+- **Owner separate from visibility** (`sql/14_owner_visibility_columns.sql`):
+  relayed finding was that a visibility-only access model let
+  correctly-shared rows flood every user's session-boot payload anyway,
+  because nothing filtered by *owner* as a distinct axis. Confirmed the same
+  gap would exist here (no owner concept existed before this file) and
+  adopted the fix: owner is the present-day orientation axis, visibility is
+  a deferred privacy layer, and boot-surface functions filter on owner
+  explicitly rather than relying on visibility alone.
+- **No destructive hot-index eviction**
+  (`sql/15_hot_index_no_destructive_eviction.sql`): relayed finding was a
+  15-row cap that deleted the lowest-scoring row on each promotion,
+  destroying history. This repo had the identical defect, independently
+  introduced. Fixed the same way: the row cap belongs to the read-side
+  ranking view/function, never to the write path.
+- **Whitespace-class rejection**
+  (`sql/16_whitespace_class_rejection.sql`): relayed finding was that a
+  `btrim()`-only emptiness check misses all-tab/all-newline values. This
+  repo had no emptiness check at all on the relevant columns before this
+  file (worse than the reported defect, not better) — added the
+  whitespace-class version directly rather than a weaker one first.
+- **Evidence-locator resolvability is not evidence-string presence**
+  (see STATUS.md, "Evidence-locator audit"): relayed finding was that a
+  NOT NULL constraint on a citation-style column had shipped alongside three
+  citations that didn't actually resolve to anything, including one naming
+  an artifact that never existed. This repo's own audit (report-only, this
+  session) did not find a citation naming something that provably never
+  existed, but did find a category of prose "session reference" citations
+  with no independently checkable locator — the same class of problem,
+  named here so it doesn't get treated as solved just because a NOT NULL
+  constraint already exists (`sql/03_provenance.sql`).
+
+**Explicitly not adopted this pass, raised as GitHub issues instead** (exact
+serialized-budget monotonicity, append-only attention events with source
+semantics, historical-import segregation, project/topic/artifact grain
+discipline): all four presuppose a digest builder or event substrate that
+does not exist in this repo yet. Recording the constraint now, before
+building either, rather than building first and retrofitting.
 
 ## New in this repo, not present in the personal core
 

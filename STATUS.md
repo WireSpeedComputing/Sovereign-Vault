@@ -1,10 +1,110 @@
 # STATUS
 
-Last updated: 2026-07-10. Phase 0 and Phase 1 SQL were applied to a real
+Last updated: 2026-07-27. See "Domain layer + multi-user hardening" below for
+the most recent work. Phase 0 and Phase 1 SQL were applied to a real
 PostgreSQL 16 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance
 tests were executed for real, not just reasoned about. Results below. This
 was NOT tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Domain layer + multi-user hardening — APPLIED AND VERIFIED (2026-07-23 / 2026-07-27)
+
+Two deployment sessions against the same live Supabase (PG17) project this
+repo tracks. `sql/10` through `sql/16` were applied in order, each tested
+against real data before being considered done (not just reasoned about).
+
+**`sql/10`–`sql/12` (2026-07-23):** an example domain layer (a generic
+supplier/claims/compliance module — see file headers for the shape) plus a
+`compliance_check()` scan RPC. Two real bugs were found and fixed via smoke
+testing before any real data touched the schema: (1) a RETURNS TABLE output
+parameter sharing a name with a table column caused "ambiguous column"
+errors — fixed by table-qualifying every reference. (2) `substring(text FROM
+pattern)` is case-sensitive even when the presence check used the
+case-insensitive `~*` operator, so a case-insensitive match could still
+extract `NULL` — fixed by prefixing the extraction pattern with `(?i)`. A
+third, subtler gap was caught by testing two claims on the same evidence
+field rather than one: extracting a "stated value" by scanning the *entire*
+input let a correct value on one claim mask a wrong value on a different
+claim sharing the same unit. Fixed by windowing the extraction around each
+claim's own text match instead of scanning the whole input.
+
+**`sql/13` (2026-07-27): promotion deadlock fix.** A human-gated promotion
+function (`promote_memory`-equivalent) performs its own sanctioned
+status-mutating UPDATE, which was tripping the same provenance-guard trigger
+meant to stop an agent from self-attesting a row to "current" — because the
+trigger could not distinguish the sanctioned transition from a bare UPDATE
+attempting the same thing. Confirmed present on real data before fixing: two
+agent-sourced proposed rows with `source_document` provenance could never be
+promoted through the sanctioned function. Fixed with a transaction-local GUC
+guard, matching the existing `guard_canonical_write`/`app.allow_canonical_write`
+precedent from the reference personal-core deployment (see LINEAGE.md).
+**A second real bug was found testing the fix itself:** `SET LOCAL` persists
+for the remainder of the *transaction*, not just the one guarded statement —
+so if the sanctioned function is called as one statement inside a larger
+multi-statement transaction, the guard stays armed for everything after it,
+silently defeating it for a later bare UPDATE in that same transaction.
+Fixed by resetting the guard immediately after the guarded statement, before
+the function returns, rather than leaving it set until transaction end.
+Regression-tested: the sanctioned promotion path still succeeds and stamps
+the promoter; a bare UPDATE attempting the same transition is rejected,
+including when run as a later statement in the same transaction as a
+successful promotion; the pre-existing agent-cannot-self-attest INSERT rule
+is unaffected; a general "no direct status mutation outside sanctioned
+functions" guard now also covers non-agent-sourced rows, which the original,
+narrower rule did not reach.
+
+**Honest limit, stated plainly and not just in this file:** under a single
+shared service-role key, this guard is accident-prevention and audit, not
+identity enforcement. Any caller sharing that connection can set the same
+GUC directly and bypass the human-principal check that precedes it. The real
+boundary is per-principal/per-agent connection identity, which this repo
+does not yet have (see "Known open risks," unchanged since 2026-07-10).
+
+**`sql/14`: owner/visibility separation.** Adds an `owner` column (whose
+working set a row belongs to, for session-boot orientation) separate from a
+`visibility` column (a future privacy layer, currently defaulting to a
+permissive value). These are deliberately not the same axis: a
+visibility-only model was found (on the reference personal-core deployment,
+relayed for this repo's benefit — see LINEAGE.md) to leak correctly-shared
+rows into every user's boot payload anyway, because nothing filtered by
+*owner*. Added owner-scoped wrapper functions (a view cannot take a
+parameter) for the ranking and deadline boot surfaces; the original unscoped
+views remain as a global/admin reference, not the boot path.
+**Isolation tests written and run** (`tests/03_owner_visibility_isolation.sql`,
+parameterized by principal id): for each of three distinct principals, the
+owner-scoped surfaces return that principal's own private rows plus all
+shared rows, and zero rows privately owned by a different principal.
+Confirmed by running the test, not assumed from the schema shape.
+
+**`sql/15`: hot-index eviction defect.** The hot/attention index's
+promote-from-staging step deleted the lowest-ranked row whenever a fixed
+row cap was reached, silently losing history. Fixed by removing the
+delete-on-cap-reached step entirely; the index table now grows unbounded,
+and the row cap is enforced only in the read-side ranking view (`LIMIT`),
+not the write path. Verified: pushed 18 topics through in one test where the
+old cap was 15; all 18 remained in the index table afterward. **No migration
+recovers rows evicted before this fix** — that history is genuinely gone;
+noted here rather than glossed over.
+
+**`sql/16`: whitespace-class rejection.** Added `CHECK (<col> !~ '^\s*$')`
+on required text columns. A `btrim()`-only emptiness check (not present in
+this repo before this file, but worth guarding against regardless) only
+strips spaces by default — a value of solely tabs/newlines would pass such a
+check while still being functionally empty. NULL is unaffected; this only
+rejects a non-NULL whitespace-only value. Applied and validated against all
+existing rows with zero constraint violations.
+
+**Evidence-locator audit (report-only, no schema change):** scanned every
+citation-style value across the deployment this session. Categories that
+embed a database-checkable reference (an internal-artifact id, a
+cross-referenced record id) were spot-checked for resolvability and came
+back 100% resolvable. A meaningful minority of citations are prose
+"recorded by X in session Y" references with no independently checkable
+locator at all — not necessarily wrong, but not tooling-resolvable, which is
+exactly the trap worth naming rather than assuming away (a NOT NULL
+citation column proves a string is present, not that it resolves to
+anything real). No correction was made to any citation this pass — the
+constraint is "report classification, never invent a replacement locator."
 
 ## Postgres 17 / Supabase validation — APPLIED AND VERIFIED (2026-07-10)
 
