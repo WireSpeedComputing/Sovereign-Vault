@@ -1,11 +1,87 @@
 # STATUS
 
-Last updated: 2026-07-27. See "Domain layer + multi-user hardening" below for
-the most recent work. Phase 0 and Phase 1 SQL were applied to a real
-PostgreSQL 16 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance
-tests were executed for real, not just reasoned about. Results below. This
-was NOT tested against Supabase at that time — see "Not yet tested" (2026-07-08
+Last updated: 2026-07-27. See "Correctness hardening" below for the most
+recent work. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
+instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance tests were
+executed for real, not just reasoned about. Results below. This was NOT
+tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Correctness hardening — APPLIED AND VERIFIED (2026-07-27, same day as the section below)
+
+A live deployment's own diligence pass against this schema found two real
+defects in `compliance_check()` (introduced in the "Domain layer" work
+below) and one repo-completeness gap. Fixed the same day, each with a test
+proving both the bug and the fix -- not just reasoned about.
+
+**Blocker: disclaimer false-positive.** The disease-claim `banned_phrase`
+regex (added in `sql/12`) matches the shape of the FDA-mandated disclaimer
+sentence itself — "...not intended to diagnose, treat, cure, or prevent any
+disease." Net effect: the tool told users to remove the one sentence
+regulation requires, on every compliant submission. Confirmed live before
+fixing. Postgres regex has no lookbehind, so this needed a function-logic
+fix, not a pattern tweak: `sql/18` adds a nullable `safe_context_pattern`
+column to `language_rules` and, in `compliance_check()`, strips any text
+matching a rule's `safe_context_pattern` from a working copy before testing
+that rule's pattern against it — so a match that only existed inside known
+disclaimer boilerplate disappears, while a real violation elsewhere in the
+same text still fires against the same stripped copy. Four tests, all
+passing: disclaimer alone (zero findings), compliant copy with disclaimer
+(zero findings), a real violation plus the disclaimer (violation flagged,
+disclaimer not flagged), a real violation with no disclaimer (both the
+violation and `missing_disclaimer` fire, unchanged prior behavior).
+
+**`missing_disclaimer` over-firing.** It previously fired on any input
+lacking the disclaimer sentence, including claim-free headlines and
+internal notes — noise that trains users to ignore findings. Fixed
+(`sql/18`, same migration): only raised when the input is actually
+claim-bearing (a `banned_language`/positioning finding fired, an
+`ingredient_claims` row matched regardless of pass/fail, or an ingredient
+mention appears alongside a generic benefit verb). Two tests: a bare
+compliant headline with no claims returns zero findings; a structure/
+function claim without the disclaimer still fires it.
+
+**Coverage honesty, not a code bug.** `compliance_check()`'s claim/dose
+checking is only as complete as the `ingredient_claims` rows behind it.
+Of the six branded ingredients in the example domain module, three had
+zero claim rows at the time of this check (their supplier-sent claims
+documents exist only as scanned/binary attachments that failed text
+extraction, or were never supplied) — meaning a wrong claim or wrong dose
+about any of those three would currently pass silently. Not faked or
+worked around. Added `compliance_coverage()` (`sql/18`) reporting, per
+ingredient, whether claim data exists at all and whether any of it states a
+checkable minimum dose, so a clean `compliance_check()` result is never
+mistaken for more coverage than it actually has.
+
+**Repo-completeness gap found and closed the same day:** `reject_memory()`
+— the third leg of the propose/accept/reject/supersede pattern — had been
+added directly to the live database in a separate session and was never
+committed to this repo at all. Added as `sql/17`, matching `promote_memory`'s
+guard pattern exactly (see below).
+
+**Consistency fix, not a proven live bug:** `reject_memory()`'s guarded
+UPDATE was already wrapped in an explicit exception handler that resets the
+`app.promoting` guard even if the UPDATE itself raises — more defensive
+than `promote_memory`/`supersede_memory`'s original bare set-update-set
+sequence. No live failure mode was found that actually exercises the gap
+(the natural failure paths in both functions raise before the guard is
+ever set), but the risk is structurally real: an exception during the
+guarded UPDATE, caught by an outer block in the same transaction, would
+otherwise leave the guard armed for whatever runs next in that transaction
+— the same class of leak already fixed once for the multi-statement-
+transaction case. Closed proactively by adopting `reject_memory`'s pattern
+into both functions (`sql/13`, updated) rather than waiting for an incident
+to prove it necessary.
+
+**`sql/13`–`sql/18` were also found to be commented-out reference pseudocode
+in this repo, not real applicable DDL** — inconsistent with every other file
+here, all of which apply cleanly to a real database. Rewritten as real,
+executable SQL matching exactly what has been tested live this session
+(verified by static collision checks across all files — no naming
+collision with `sql/00`–`sql/12`, confirmed via `grep`; full end-to-end
+apply against a disposable project was considered and not done, since
+spinning one up carries a real billing cost that needs the account owner's
+sign-off, not just an agent's judgment call).
 
 ## Domain layer + multi-user hardening — APPLIED AND VERIFIED (2026-07-23 / 2026-07-27)
 
