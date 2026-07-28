@@ -1,4 +1,4 @@
--- Owner/visibility isolation test (WO-04 Task 3.4 / WARDEN item 11).
+-- Owner/visibility isolation test.
 -- Written per-principal, run inside a transaction that is always rolled back -- no
 -- fixture data is left behind. Assert that each principal's owner-scoped boot surfaces
 -- (memory_hot_ranked_for, deadlines_upcoming_for) return their own private rows plus all
