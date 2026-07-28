@@ -1,11 +1,66 @@
 # STATUS
 
-Last updated: 2026-07-27. See "Correctness hardening" below for the most
+Last updated: 2026-07-28. See "Disease-claim false negative" below for the most
 recent work. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance tests were
 executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Disease-claim false negative — FIXED AND VERIFIED (2026-07-28)
+
+A live deployment's verification pass found a false NEGATIVE in
+`compliance_check()`: the sentence "cures anxiety" returned zero findings.
+Root cause, confirmed live before fixing: the disease-claim rule's condition
+alternation contained `anxiety disorder` but not bare `anxiety`, and its verb
+alternation omitted `mitigate` — which is explicit statutory language in
+DSHEA 21 U.S.C. 343(r)(6) ("diagnose, mitigate, treat, cure, or prevent").
+Named conditions that *were* enumerated (depression, insomnia, "anxiety
+disorder") fired correctly, so the rule was not broken — it was incomplete.
+
+**False negatives are the worst failure mode for this tool.** A false positive
+annoys a user; a false negative silently permits a regulatory violation. This
+was the most serious defect found in the compliance surface to date.
+
+**How it survived two prior verification passes:** both used COMPOUND test
+sentences. "cures anxiety and treats depression" passes on the depression
+clause, masking the anxiety gap completely. One of those passes then reported
+the anxiety rule as verified on that basis — a wrong attribution, not a wrong
+result. **Mandatory discipline going forward, recorded in
+`tests/20_disease_claim_term_coverage.sql`: one claim term per test sentence,
+never compound.** Every enumerated term gets an isolated positive test; every
+approved structure/function phrase gets an isolated negative test.
+
+**Fix (two layers, because enumeration alone will always have gaps):**
+- *critical*: disease-claim verb + a named disease/disorder. Verb list
+  extended with the statutory `mitigate` plus alleviate/relieve/remedy/heal/
+  reverse/combat/fight/eliminate/eradicate. Condition list extended from 9
+  terms to ~90 covering mental health, sleep, cognitive, cardiovascular,
+  metabolic, GI, autoimmune, neurological, oncological and common others.
+- *high*: disease-claim verb + a symptom or health-state noun, with no disease
+  named. FDA 21 CFR 101.93(g) treats claims about characteristic symptoms of
+  a disease as disease claims; this is the construction most often cited in
+  supplement warning letters. Scored high rather than critical because some
+  phrasings are contextually defensible and need human judgment.
+
+Structure/function verbs (`supports`, `promotes`, `helps maintain`) are
+deliberately absent from both verb lists, so approved framing never fires.
+
+**16 isolated tests, all passing:** 8 named-disease terms fire, 3 implied
+symptom claims fire, 3 approved structure/function phrasings stay silent, and
+both disclaimer regressions from the 2026-07-27 fix still hold (the mandated
+disclaimer alone produces zero findings; a real violation in the same text as
+the disclaimer still fires).
+
+**Note on where the rules live:** this repo ships the `language_rules` schema
+and `compliance_check()` logic but *no seed rules* — rule rows are deployment
+data. A consequence worth stating plainly: a fresh install has an empty
+ruleset, and `compliance_check()` will report clean on everything until rules
+are seeded. `compliance_coverage()` exists to make that visible rather than
+mistaking an empty ruleset for a passing grade. Whether a generic starter
+ruleset for US dietary-supplement compliance belongs in this repo (the
+regulatory citations are public facts, not deployment data) is an open design
+question, not an oversight.
 
 ## Correctness hardening — APPLIED AND VERIFIED (2026-07-27, same day as the section below)
 

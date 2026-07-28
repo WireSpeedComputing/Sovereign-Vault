@@ -37,10 +37,18 @@ database the schema exists to create.
 
 ## Status
 
-Phase 0 and Phase 1 (see below) were applied to a real PostgreSQL 16 instance
-and all Phase 1 acceptance tests pass there. **Not yet validated against
-Supabase specifically.** See `STATUS.md` for the honest checklist before this
-is trusted with real business data.
+Applied and validated against both vanilla PostgreSQL 16 and a real Supabase
+project running PostgreSQL 17. All Phase 1 acceptance tests plus the
+import-framework tests pass on both. The domain-layer example, compliance
+scanning, promotion/rejection governance, and owner-scoped boot surfaces are
+also applied and tested — see `STATUS.md`, which is the authoritative
+record and lists every defect found and fixed along the way.
+
+**Read `STATUS.md`'s "Known open risks" before trusting this with real
+business data.** The largest one: under a single shared service-role
+connection, the human-gated governance functions are accident-prevention and
+audit, not identity enforcement. Per-principal connection identity does not
+exist yet.
 
 ## Repo map
 
@@ -62,12 +70,40 @@ sql/05_perimeter_assert.sql  Phase 1: perimeter check covering BOTH table grants
 sql/06_import.sql            import framework: preserve-then-normalize,
                               import batches, raw artifacts, human-gated
                               promotion, cutover scorecard
+sql/07_default_privileges.sql  ALTER DEFAULT PRIVILEGES hardening + one-time
+                              remediation sweep (closes the Supabase auto-grant
+                              class of gap for anything created afterward)
+sql/08_advisor_fixes.sql     pin search_path where the advisor flagged it
+sql/09_review_queue.sql       contradiction / confirmation queue: imports and
+                              agents never silently pick a side
+sql/10-12                    EXAMPLE domain layer (supplier/claims/compliance
+                              module) + compliance_check() scan RPC. Illustrates
+                              the "bring your own schema" contract; replace with
+                              your own domain.
+sql/13-16                    promotion-deadlock fix (transaction-local guard),
+                              owner/visibility separation + owner-scoped boot
+                              surfaces, hot-index destructive-eviction removal,
+                              whitespace-class rejection
+sql/17_reject_memory.sql     the third leg of propose/accept/reject/supersede
+sql/18                       compliance_check disclaimer false-positive fix
+                              (safe_context_pattern) + compliance_coverage()
+sql/19_schema_changelog_rls.sql  RLS on the DDL changelog table
+tests/                       isolation and compliance regression tests, meant
+                              to be RUN, not read. See the header of
+                              tests/20_* for the one-term-per-test discipline
+                              and why it exists.
 docs/01-architecture.md      concepts, "bring your own schema" contract for
                               domain tables, temporal/supersede pattern template
 docs/02-onboarding-principals.md   template for registering humans and agents
                               with scoped capabilities (placeholders only —
                               your real roster is data, not repo content)
 ```
+
+Note: file numbering here is cumulative-by-topic and does not map 1:1 to a
+deployment's applied-migration numbering. Several live fix-migrations are
+folded into the file they correct rather than committed one-per-migration.
+Verify a deployment against these files by content, not by name — a
+name-matching audit missed a real RLS gap that only a content grep caught.
 
 ## What's deliberately NOT here
 
@@ -85,7 +121,9 @@ docs/02-onboarding-principals.md   template for registering humans and agents
 ## Quick start
 
 1. Create a Supabase project or vanilla Postgres 15+ database.
-2. Run `sql/00_extensions.sql` through `sql/05_perimeter_assert.sql` in order.
+2. Run `sql/00_extensions.sql` through `sql/19_schema_changelog_rls.sql` in
+   numeric order. `sql/10`–`sql/12` are an example domain module — skip or
+   replace them with your own domain schema.
 3. Register your own principals (`docs/02-onboarding-principals.md` has the
    template) — do not skip this and use only the service-role key for
    everything, or multi-user is cosmetic.
