@@ -1,12 +1,67 @@
 # STATUS
 
-Last updated: 2026-07-28. Most recent work: "Fresh-install replay" and
+Last updated: 2026-07-28. Most recent work: "Transition concurrency + actor custody", "Fresh-install replay", and
 "Disease-claim false negative" below. The replay is reproducible — run
 `tests/replay_fresh_install.sh` rather than trusting this file. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance tests were
 executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Transition concurrency + actor custody — FIXED (2026-07-28)
+
+An independent architecture review found two defects in the lifecycle
+transition functions that prior sessions, including this repo's own test
+batteries, had all missed. Both were confirmed against a live deployment
+before fixing. `sql/20`.
+
+**Defect 1 — lifecycle races.** `promote_memory`, `reject_memory`, and
+`supersede_memory` each read a row's status, then UPDATE it later, with no row
+lock and without retaining the expected state in the UPDATE predicate. Two
+concurrent sessions can both read `proposed`; one promotes; the other then
+rejects and overwrites the result. Not hypothetical: a session stuck
+idle-in-COMMIT holding locks on this table was observed on a live deployment
+the same day. Concurrent supersession could additionally produce two `current`
+replacements for one predecessor, silently forking the record, because
+`supersedes` carried no uniqueness constraint for live successors.
+
+Fixed with `SELECT ... FOR UPDATE`, expected-state predicates
+(`where id = ? and status = ?`) with an explicit lost-race exception, and a
+partial unique index on `(supersedes) where supersedes is not null and
+status = 'current'`.
+
+**Defect 2 — supersession had no actor custody at all.** `supersede_memory()`
+accepted no acting principal, performed no active-human validation, and
+recorded no actor. Every supersession before this migration is attributable to
+nobody. The actor is now a required argument, validated as an active human, and
+recorded. **The old 5-argument form is dropped rather than left callable**, so
+the unaudited path cannot be reached by accident.
+
+**Honest labelling of what the actor proves.** A caller-supplied principal UUID
+demonstrates only that the UUID belongs to an active human — not that the
+caller *is* that human, while clients share one unrestricted credential. Rather
+than leave that implicit, all three functions now stamp
+`actor_assurance = 'caller_asserted_unauthenticated'` into the row metadata, so
+a later reader cannot mistake these records for authenticated attribution. The
+review's refinement on this point is worth recording: the blocker is not a
+shared *physical connection* or pool, it is a shared *authorization identity*.
+A shared pool is acceptable if every request carries independently verified
+identity the client cannot forge — either by authenticating the human through
+an identity provider and deriving the actor inside the trusted path, or via a
+trusted gateway that authenticates each request and signs an identity
+assertion the database verifies. Both remove the caller-supplied UUID. Neither
+exists here yet, which is why human multi-user access remains deferred.
+
+**Verification status, stated precisely.** Structural checks pass on the live
+deployment: all three functions lock and retain expected state, the old
+5-argument function is gone, the successor uniqueness index exists. Negative
+paths verified live and fail before any mutation: an agent actor is rejected,
+and a non-existent principal is rejected. **The positive path of the new
+6-argument supersede — that a valid human actor succeeds and the actor is
+recorded — has not yet been exercised end-to-end**, because the host available
+at the time had no local Postgres to run `tests/replay_fresh_install.sh`
+against. That test is outstanding and should be run before relying on this
+migration in a fresh install.
 
 ## Fresh-install replay — PROVEN (2026-07-28)
 
