@@ -129,8 +129,15 @@ regex (added in `sql/12`) matches the shape of the FDA-mandated disclaimer
 sentence itself — "...not intended to diagnose, treat, cure, or prevent any
 disease." Net effect: the tool told users to remove the one sentence
 regulation requires, on every compliant submission. Confirmed live before
-fixing. Postgres regex has no lookbehind, so this needed a function-logic
-fix, not a pattern tweak: `sql/18` adds a nullable `safe_context_pattern`
+fixing. **Correction to an earlier version of this note:** it claimed Postgres
+regex has no lookbehind, and that this forced a function-logic fix. That is
+false — Postgres ARE supports both `(?<=)` and `(?<!)`, verified on 17.6. The
+`safe_context_pattern` approach is still the right design, but for a different
+reason than originally stated: embedding the disclaimer sentence as a negative
+lookbehind inside every rule's pattern would duplicate it across rules and make
+each pattern nearly unreadable, whereas a declarative exempt-context column is
+reusable and inspectable. Choose it for maintainability, not because the
+alternative is unavailable. `sql/18` adds a nullable `safe_context_pattern`
 column to `language_rules` and, in `compliance_check()`, strips any text
 matching a rule's `safe_context_pattern` from a working copy before testing
 that rule's pattern against it — so a match that only existed inside known
