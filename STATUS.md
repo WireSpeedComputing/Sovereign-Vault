@@ -1,11 +1,66 @@
 # STATUS
 
-Last updated: 2026-07-28. See "Disease-claim false negative" below for the most
-recent work. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
+Last updated: 2026-07-28. Most recent work: "Fresh-install replay" and
+"Disease-claim false negative" below. The replay is reproducible — run
+`tests/replay_fresh_install.sh` rather than trusting this file. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance tests were
 executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Fresh-install replay — PROVEN (2026-07-28)
+
+**This repo had never been proven to build from scratch.** Two independent
+reviewers flagged it: a design review listed clean-install CI as a
+prerequisite, and a prior session declined to spin up a disposable cloud
+project because it carried a billing cost needing the account owner's
+sign-off. The gap stood for weeks while `sql/13`-`sql/18` sat in the repo as
+commented-out pseudocode (since rewritten) that had never been executed here.
+
+Done now, at zero cost, on local PostgreSQL 17.10 with pgvector 0.8.5, in an
+isolated cluster on a non-default port and its own data directory.
+
+**Result: all 20 files (`sql/00` through `sql/19`) apply clean from an empty
+database, in numeric order, first attempt, zero errors.**
+
+Post-replay verification:
+- `perimeter_assert()` returns 0 rows.
+- Every base table in `public` has RLS enabled — 0 exceptions. (This is the
+  check that would have failed before `sql/19`; see the section below.)
+- Object inventory: 22 tables, 4 views, 13 public enums, 19
+  repo-owned functions (excluding extension-owned).
+- **Equivalence with a live deployment confirmed by name, not count:** the
+  list of repo-owned functions in the fresh build is character-for-character
+  identical to the same list on a live production deployment. Raw object
+  *counts* differ and are not a useful comparison — a cloud host's database
+  carries its own auth/storage schemas, and extension function counts vary by
+  extension version. Compare names, filtered to non-extension objects.
+- Only two tables hold rows after replay: `schema_changelog` (the DDL event
+  trigger correctly logging the migration run itself) and
+  `provenance_registry` (schema configuration). No test fixtures persist.
+
+Enforcement was then exercised on the fresh build, not assumed from schema
+shape. 8 checks, all protections confirmed working:
+provenance_basis required; an agent cannot claim `human_direct`; an agent
+cannot land at `current` without `decision_record`; a bare `UPDATE` to
+`current` is rejected; an agent cannot call the promotion function; a human
+can; rejection works; and the transaction-local guard is **not** left armed
+after a successful promotion (the `SET LOCAL` scope bug fixed on 2026-07-27
+stays fixed).
+
+One note on that battery, recorded because the distinction matters: the
+bare-`UPDATE` check was initially scored "unexpected" because it was rejected
+by the agent-self-attest guard rather than the bounded-transition guard the
+test asserted on. The update was blocked — by an earlier layer, with an error
+message that points the caller at the sanctioned function. That was a
+too-narrow test assertion, not a schema defect. Two independent guards cover
+that transition; a test asserting on one specific error string will
+mis-attribute which one fired.
+
+**What a local replay cannot prove**, and what therefore remains
+cloud-host-specific: default-privilege behavior on newly created objects (the
+gap `sql/07` exists to close), and the extension-in-public placement issue
+tracked separately. Those stay validated only against a real hosted project.
 
 ## Disease-claim false negative — FIXED AND VERIFIED (2026-07-28)
 
