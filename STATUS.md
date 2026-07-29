@@ -1,12 +1,66 @@
 # STATUS
 
-Last updated: 2026-07-28. Most recent work: "Transition concurrency + actor custody", "Fresh-install replay", and
+Last updated: 2026-07-29. Most recent work: "Governed retrieval, Phase C", "Transition concurrency + actor custody", "Fresh-install replay", and
 "Disease-claim false negative" below. The replay is reproducible — run
 `tests/replay_fresh_install.sh` rather than trusting this file. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance tests were
 executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Governed retrieval, Phase C - IMPLEMENTED (2026-07-29)
+
+Recall did not exist. Embedding columns and HNSW indexes sat on the canonical
+tables with no function querying them: storage without retrieval, in a system
+whose whole purpose is storing and recalling. `sql/21`.
+
+Design follows the retrieval profile from the architecture review. Canonical
+rows stay authoritative; `retrieval_units` and `retrieval_embeddings` are
+disposable derived projections, rebuildable at will, so a chunking change or an
+embedding-model migration never touches the system of record. Embeddings are
+keyed by model identity in their own table, so adopting a new model is an
+additive row rather than a destructive overwrite of one vector column, and two
+models can be compared side by side.
+
+Two properties are load-bearing:
+
+1. **Filtering happens before ranking**, in its own CTE. Ranking never sees a
+   row the principal cannot see, so neither a relevance score nor a match count
+   can leak the existence of another principal's private record. Verified: a
+   private canary owned by one principal was matched only by its owner; two
+   other principals saw neither the match nor the unit in their visible count.
+2. **`retrieve_context` returns a jsonb envelope, never a bare rowset.** An
+   empty rowset is indistinguishable from "nothing relevant exists". The
+   envelope always reports units visible, units matched, mode, budget used and
+   whether results were truncated, so `evaluated` with zero matches is
+   distinguishable from `not_evaluated` (no units visible, or an empty query).
+   This is the same principle the compliance surface needs and does not yet have.
+
+Hybrid by design, FTS-capable today: there is no embedding pipeline, so the
+caller supplies a query embedding when it has one. Without one the receipt
+reports `fts_only` rather than implying semantic recall happened. Fusion is
+reciprocal rank fusion, which needs no calibration between incomparable scales.
+
+Three defects were found and fixed during implementation, all mine:
+- the projection builder called a non-existent function. plpgsql bodies are not
+  validated at CREATE time, so the migration applied cleanly and would have
+  failed only on first invocation.
+- `retrieve_context` used `ON COMMIT DROP` temp tables, which persist for the
+  transaction, so calling it twice in one statement failed. Rewritten as pure
+  CTEs.
+- a single match longer than the whole budget was dropped, returning an empty
+  results array for a query that did match. The top match now always survives,
+  truncated to fit and flagged per-result with `text_truncated`.
+
+Verified on a fresh database: all 22 SQL files replay clean, and
+`tests/21_transition_custody_and_retrieval.sql` passes end to end, including the
+supersede positive path that had previously shipped asserted-but-unexecuted.
+
+**Known limits.** No embedding pipeline, so semantic recall is unavailable until
+one exists; the schema is ready for it. Wiki sections project but there are no
+`current` wiki pages in the reference deployment yet, so heading-split rendering
+is exercised only by tests. Domain renderers (Phase D) and session integration
+(Phase E) are not started.
 
 ## Transition concurrency + actor custody — FIXED (2026-07-28)
 
