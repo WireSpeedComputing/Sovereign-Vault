@@ -45,10 +45,10 @@ also applied and tested — see `STATUS.md`, which is the authoritative
 record and lists every defect found and fixed along the way.
 
 **Read `STATUS.md`'s "Known open risks" before trusting this with real
-business data.** The largest one: under a single shared service-role
-connection, the human-gated governance functions are accident-prevention and
-audit, not identity enforcement. Per-principal connection identity does not
-exist yet.
+business data.** The private identity-binding layer now exists, but it ships
+with zero bindings and zero grants. Until real Auth/OAuth tokens are verified
+and reviewed bindings are activated, shared administrative connections remain
+control-plane authority rather than attributable identity.
 
 ## Repo map
 
@@ -88,6 +88,10 @@ sql/17_reject_memory.sql     the third leg of propose/accept/reject/supersede
 sql/18                       compliance_check disclaimer false-positive fix
                               (safe_context_pattern) + compliance_coverage()
 sql/19_schema_changelog_rls.sql  RLS on the DDL changelog table
+sql/20-22                    transition custody, governed retrieval, and
+                              wiki-page source-agent parity
+sql/23_identity_capability_enforcement.sql  private fail-closed identity
+                              bindings and dual human/agent authorization
 tests/                       isolation and compliance regression tests, meant
                               to be RUN, not read. See the header of
                               tests/20_* for the one-term-per-test discipline
@@ -97,6 +101,8 @@ docs/01-architecture.md      concepts, "bring your own schema" contract for
 docs/02-onboarding-principals.md   template for registering humans and agents
                               with scoped capabilities (placeholders only —
                               your real roster is data, not repo content)
+docs/03-identity-capability-enforcement.md  threat model, exposure boundary,
+                              activation gates, and deployment/data split
 ```
 
 Note: file numbering here is cumulative-by-topic and does not map 1:1 to a
@@ -121,7 +127,8 @@ name-matching audit missed a real RLS gap that only a content grep caught.
 ## Quick start
 
 1. Create a Supabase project or vanilla Postgres 15+ database.
-2. Run `sql/00_extensions.sql` through `sql/19_schema_changelog_rls.sql` in
+2. Run `sql/00_extensions.sql` through
+   `sql/23_identity_capability_enforcement.sql` in
    numeric order. `sql/10`–`sql/12` are an example domain module — skip or
    replace them with your own domain schema.
 3. Register your own principals (`docs/02-onboarding-principals.md` has the

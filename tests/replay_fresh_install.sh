@@ -74,6 +74,14 @@ if [ "$PERIM" != "0" ] || [ "$NORLS" != "(none)" ]; then
   exit 1
 fi
 
+IDENTITY_TEST="$(cd "$(dirname "$0")" && pwd)/22_identity_capability_enforcement.sql"
+if [ -f "$IDENTITY_TEST" ]; then
+  echo "== identity capability regression =="
+  psql -d "$DB" -v ON_ERROR_STOP=1 -q -f "$IDENTITY_TEST" \
+    || { echo "IDENTITY REGRESSION FAILED"; exit 1; }
+  echo "  PASS  $(basename "$IDENTITY_TEST")"
+fi
+
 echo
 echo "REPLAY CLEAN."
 echo "NOTE: a local replay cannot prove cloud-host default-privilege behavior"
