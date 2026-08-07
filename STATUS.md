@@ -8,6 +8,65 @@ executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
 
+## Retrieval projection: no auto-refresh, and a live visibility leak (2026-08-07)
+
+Two separate problems in the retrieval projection. `pending/C_retrieval_projection_refresh.sql`
+addresses both for future writes; NOT APPLIED.
+
+### 1. The projection was never maintained automatically
+
+`retrieval_units` is built by `refresh_retrieval_units()`, a full rescan invoked
+by hand. Nothing called it. Six memories written by other sessions were
+invisible to `retrieve_context()` until the refresh was run manually — the rows
+existed, were `current`, and simply were not in the projection.
+
+That failure is silent by construction. `retrieve_context()` reports
+`units_visible` and `units_matched` honestly, but only about units that exist; a
+memory that was never projected is indistinguishable from one that does not
+exist. The envelope's entire purpose is to separate "nothing found" from
+"nothing searched", and an unmaintained projection defeats it one layer down.
+
+`pending/C` adds per-row AFTER triggers on `memories` and `wiki_pages`. Not a
+rescan and not a schedule — `pg_cron` is not installed. The UPDATE triggers
+carry a WHEN clause so embedding backfill, `hot_touch` and `due_status` writes
+do not re-project. 13 tests in `pending/C_..._TEST.sql`, all passing on a fresh
+replay with C applied.
+
+### 2. LIVE DEFECT — a memory made private stays readable through retrieval
+
+**This one needs an owner decision; it is on the deployment now.**
+
+`refresh_retrieval_units()` invalidates a unit only when its source stops being
+`current` or its CONTENT HASH drifts. It never compares `owner`, `visibility` or
+`workstream`. `retrieve_context()` filters on the UNIT's copy of `visibility`,
+not the source row's.
+
+Verified on a clean PG17 replay of `sql/00-25` using only the documented
+maintenance path:
+
+| step | result |
+|---|---|
+| shared, after refresh | other principal matches the row (expected) |
+| set `visibility='private'` | other principal **still matches** |
+| run `refresh_retrieval_units()` | other principal **still matches** |
+| inspect | `retrieval_units.visibility='shared'` while `memories.visibility='private'` |
+
+The full rescan does not repair it, because the rescan has the same hash-only
+invalidation rule. **No operation currently closes this except editing the
+memory's text.**
+
+It interacts badly with `sql/25`: now that a promoted record's content is
+immutable, the one accident that used to clear a stale unit — someone editing
+the text — cannot happen anymore, so the leak becomes permanent for the affected
+row instead of eventually self-healing.
+
+`pending/C` fixes it for rows changed after it is applied. It does NOT
+retroactively repair units that are already stale, and fixing
+`refresh_retrieval_units()` itself is a change to `sql/21` that has been left
+for the owner rather than folded in. Any deployment that has ever changed a
+memory's visibility or owner should be treated as having stale units until that
+is done.
+
 ## Propose-then-promote + promoted-record audit — BUILT, NOT YET APPLIED (2026-08-07)
 
 `sql/25_propose_then_promote.sql`. Upstream #46 (ADOPT) and #47 (ADOPT).
