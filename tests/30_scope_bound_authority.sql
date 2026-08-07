@@ -225,16 +225,28 @@ EXCEPTION WHEN others THEN
 
 SELECT section, test, pass, left(detail,64) AS detail FROM t ORDER BY section, test;
 
-SELECT 'A_scope_isolation' AS summary, bool_and(pass) AS pass,
-       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' failed' AS detail
+SELECT 'A_scope_isolation' AS summary, bool_and(coalesce(pass,false)) AS pass,
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' failed' AS detail
 FROM t WHERE section='A'
 UNION ALL
-SELECT 'B_registry_fails_loudly', bool_and(pass),
-       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' failed'
+SELECT 'B_registry_fails_loudly', bool_and(coalesce(pass,false)),
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' failed'
 FROM t WHERE section='B'
 UNION ALL
-SELECT 'C_gap_still_open_expected_true', bool_and(pass),
-       count(*) FILTER (WHERE NOT pass)::text||' changed -- capabilities may now be wired'
+SELECT 'C_gap_still_open_expected_true', bool_and(coalesce(pass,false)),
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' changed -- capabilities may now be wired'
 FROM t WHERE section='C';
+
+-- ── GUARD: an assertion that evaluated to NULL is NOT a pass ───────────────
+-- Added after a discrimination run exposed this at every layer. A jsonb key
+-- that does not exist yields NULL from ->>, so `(... ->> 'k') = 'v'` is NULL
+-- rather than false; bool_and() IGNORES nulls, count(*) FILTER (WHERE NOT pass)
+-- counts zero, and the replay runner greps for '| f' and sees a blank column.
+-- 21 of 24 assertions in one file "passed" against a function that lacked the
+-- feature entirely. Any NULL here is a broken assertion, not a passing one.
+SELECT 'GUARD_no_null_assertions' AS summary,
+       coalesce(bool_and(pass IS NOT NULL), true) AS pass,
+       count(*) FILTER (WHERE pass IS NULL)::text||' assertion(s) evaluated to NULL' AS detail
+FROM t;
 
 ROLLBACK;

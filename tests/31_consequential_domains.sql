@@ -693,24 +693,36 @@ UPDATE consequential_domain_policy
 -- ── Results ────────────────────────────────────────────────────────────────
 SELECT section, test, pass, left(detail,72) AS detail FROM t ORDER BY section, test;
 
-SELECT 'A_controls' AS summary, bool_and(pass) AS pass,
-       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' failed' AS detail
+SELECT 'A_controls' AS summary, bool_and(coalesce(pass,false)) AS pass,
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' failed' AS detail
 FROM t WHERE section='A'
 UNION ALL
-SELECT 'B_44_unsourced_consequential_rejected', bool_and(pass),
-       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' still OPEN'
+SELECT 'B_44_unsourced_consequential_rejected', bool_and(coalesce(pass,false)),
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' still OPEN'
 FROM t WHERE section='B'
 UNION ALL
-SELECT 'C_44_agent_authored_consequential_rejected', bool_and(pass),
-       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' still OPEN'
+SELECT 'C_44_agent_authored_consequential_rejected', bool_and(coalesce(pass,false)),
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' still OPEN'
 FROM t WHERE section='C'
 UNION ALL
-SELECT 'D_legitimate_path_intact', bool_and(pass),
-       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' BROKEN by the guard'
+SELECT 'D_legitimate_path_intact', bool_and(coalesce(pass,false)),
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' BROKEN by the guard'
 FROM t WHERE section='D'
 UNION ALL
-SELECT 'E_documented_limits_still_present', bool_and(pass),
-       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' changed -- update the docs'
+SELECT 'E_documented_limits_still_present', bool_and(coalesce(pass,false)),
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' changed -- update the docs'
 FROM t WHERE section='E';
+
+-- ── GUARD: an assertion that evaluated to NULL is NOT a pass ───────────────
+-- Added after a discrimination run exposed this at every layer. A jsonb key
+-- that does not exist yields NULL from ->>, so `(... ->> 'k') = 'v'` is NULL
+-- rather than false; bool_and() IGNORES nulls, count(*) FILTER (WHERE NOT pass)
+-- counts zero, and the replay runner greps for '| f' and sees a blank column.
+-- 21 of 24 assertions in one file "passed" against a function that lacked the
+-- feature entirely. Any NULL here is a broken assertion, not a passing one.
+SELECT 'GUARD_no_null_assertions' AS summary,
+       coalesce(bool_and(pass IS NOT NULL), true) AS pass,
+       count(*) FILTER (WHERE pass IS NULL)::text||' assertion(s) evaluated to NULL' AS detail
+FROM t;
 
 ROLLBACK;
