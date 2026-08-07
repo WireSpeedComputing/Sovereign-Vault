@@ -1,12 +1,99 @@
 # STATUS
 
-Last updated: 2026-07-29. Most recent work: "Governed retrieval, Phase C", "Transition concurrency + actor custody", "Fresh-install replay", and
+Last updated: 2026-08-07. Most recent work: "Governed retrieval, Phase C", "Transition concurrency + actor custody", "Fresh-install replay", and
 "Disease-claim false negative" below. The replay is reproducible — run
 `tests/replay_fresh_install.sh` rather than trusting this file. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance tests were
 executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Propose-then-promote + promoted-record audit — BUILT, NOT YET APPLIED (2026-08-07)
+
+`sql/25_propose_then_promote.sql`. Upstream #46 (ADOPT) and #47 (ADOPT).
+**This file is in `sql/` but the deployment does not have it.** It replays and
+its tests pass; it has not been applied to any hosted project.
+
+**What was open.** Probed against a clean PG17 replay of `sql/00-22`: all five
+forbidden paths #46 names were open, plus three more. The root cause was not a
+broken guard — it was that no guard ran on the INSERT path at all.
+`enforce_bounded_status_transition` is BEFORE UPDATE only, and
+`enforce_agent_cannot_self_attest` constrains only `source_kind='agent'`, so
+`promote_memory()` was a convenience wrapper rather than a chokepoint and any
+caller could INSERT `status='current'` directly. Separately,
+`memories.source_artifact_id` was a bare FK unconstrained with respect to
+`raw_artifacts.action`, so `hold`/`exclude`/`evidence` artifacts normalized and
+promoted cleanly through the sanctioned human gate.
+
+**A fifth artifact class the upstream issue does not name.** `action` is
+nullable by design ("classification is explicit, never defaulted"), so `NULL` is
+the default state of every landed artifact and was promotable. The guard is
+therefore an **allowlist** on `action='import'`. A denylist keyed on
+hold/exclude/evidence would have shipped looking correct while leaving the most
+common case open.
+
+**The fix.** `status='current'` is unreachable by direct INSERT; everything
+lands `proposed` and the definer functions are the sole path. Deliberately not
+keyed on `source_kind`, which is caller-declared and therefore bypassable by
+assertion. Promoted records become immutable in their authority-bearing fields
+(`content`, `provenance_basis`, `citation`, `source_kind`, `source_agent`);
+operational fields stay mutable. `promoted_record_audit` records a content hash
+per transition and is append-only; `verify_promoted_integrity()` reports
+match / mismatch / unaudited.
+
+**A bug this exposed, found before it shipped.** `supersede_memory()` set
+`app.promoting = 'off'` immediately after updating the old row and only then
+inserted the successor — which lands at `status='current'`. With the new BEFORE
+INSERT guard, that successor INSERT fell outside the sanction window and
+legitimate supersession was blocked by the guard meant to stop illegitimate
+promotion. The GUC span is widened to cover the successor INSERT. Note this is
+the exact inverse of the `sql/13` fix, which *narrowed* the span because
+`SET LOCAL` persists to end-of-transaction. The span must be as wide as the
+sanctioned work and no wider. `tests/23` b9 is the regression test.
+
+**What this is not.** `app.promoting` is a session GUC; anyone holding
+`service_role` can set it and bypass every guard in the file. This closes the
+accidental path, not the deliberate one — accident-prevention and audit surface,
+not enforcement, exactly as `actor_assurance` is labelled in `sql/20`. Real
+enforcement needs per-principal connection identity (`vault_auth`).
+`tests/23` section D asserts the bypasses still work so the limit shows up in
+test output; if a section D test starts failing, the docs are now wrong.
+
+**Tests.** `tests/23_promotion_guards_negative.sql`: 28 assertions across four
+sections — 7 positive controls over pre-existing guards, 10 forbidden paths, 9
+mutation-audit cases, 2 documented limits. All pass on a fresh replay. The
+controls exist because a negative-test file with no control proves only that it
+can run; at commit `161b835` this same file was all-red in section B by design,
+and the assertions were written against the doctrine before the fix existed
+rather than relaxed to fit it.
+
+**Validation suite now runs on replay.** `tests/replay_fresh_install.sh`
+executes every `tests/NN_*.sql` that does not declare `REQUIRES-DEPLOYMENT`.
+`tests/03` (needs real principal ids) and `tests/12` (needs seeded compliance
+rules) declare it. Verified the runner actually fails: a deliberately-false
+probe file was detected and exited non-zero.
+
+**Open, deliberately.** `wiki_pages` is NOT gated at INSERT. It has no
+`promote_wiki()`, its column default is `status='current'`, and `supersede_wiki()`
+only replaces an already-current page — gating wiki INSERT would make
+`wiki_pages` uncreatable with no sanctioned path. Closing that asymmetry needs a
+`promote_wiki()` first. The artifact allowlist and the audit DO cover
+`wiki_pages`; only the INSERT status gate and the immutability guard are
+memories-only. Wiki content drift remains covered by `doc_integrity` /
+`bless_doc`.
+
+**Also.** `tests/replay_fresh_install.sh` now pins `LC_ALL`: PG17 on macOS
+aborts with "postmaster became multithreaded during startup" otherwise, which
+was blocking the entire harness.
+
+Documentation: `docs/04-record-lifecycle.md`.
+
+## Wiki supersession — APPLIED (2026-08-07)
+
+`sql/23_wiki_supersession.sql`, deployment migration 37. Upstream #71 closed on
+this deployment. Staged as `pending/A_wiki_supersession_ISSUE71.sql` until
+approval, then moved into `sql/` — `pending/` exists precisely so an unapproved
+migration is not swept into a replay that would then prove something untrue.
 
 ## Governed retrieval, Phase C - IMPLEMENTED (2026-07-29)
 

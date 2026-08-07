@@ -81,6 +81,48 @@ if [ "$PERIM" != "0" ] || [ "$NORLS" != "(none)" ]; then
   exit 1
 fi
 
+# ── validation suite ──────────────────────────────────────────────────────
+# Upstream #46 requires the guard tests run in the validation suite, not by
+# hand. Every tests/NN_*.sql runs here unless it declares REQUIRES-DEPLOYMENT.
+#
+# A glob rather than a named list, deliberately: a new test file is picked up by
+# existing, not by someone remembering to register it. A test nobody runs is
+# indistinguishable from one that was never written.
+#
+# REQUIRES-DEPLOYMENT is an explicit opt-out, not a heuristic. The first version
+# of this loop guessed -- it skipped any file containing :' (a psql variable)
+# and ran everything else. That was wrong twice in one run: it skipped
+# 23_promotion_guards_negative.sql, which merely contains the string
+# 'raw_artifacts:', and it RAN 12_compliance_check_*.sql, which needs seeded
+# compliance rules a fresh cluster does not have. Guessing which tests can run
+# is exactly the sort of thing that quietly stops running a test.
+TEST_DIR="$(cd "$(dirname "$0")" && pwd)"
+SUITE_FAILED=0
+echo "== validation suite =="
+for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
+  if grep -q "REQUIRES-DEPLOYMENT" "$tf"; then
+    echo "  SKIP  $(basename "$tf") (declares REQUIRES-DEPLOYMENT)"
+    continue
+  fi
+  if ! out=$(psql -d "$DB" -v ON_ERROR_STOP=1 -f "$tf" 2>&1); then
+    echo "  FAIL  $(basename "$tf") (error)"
+    echo "$out" | grep -E "ERROR|FATAL" | head -5 | sed 's/^/        /'
+    SUITE_FAILED=1
+    continue
+  fi
+  # These files exit 0 even when an assertion is false: the convention is that
+  # every `pass` column reads t. A false anywhere is a failure. Matches a lone
+  # f in a psql column, whether mid-row or last.
+  if echo "$out" | grep -qE '\|[[:space:]]*f[[:space:]]*(\||$)'; then
+    echo "  FAIL  $(basename "$tf")"
+    echo "$out" | grep -E '\|[[:space:]]*f[[:space:]]*(\||$)' | head -8 | sed 's/^/        /'
+    SUITE_FAILED=1
+  else
+    echo "  PASS  $(basename "$tf")"
+  fi
+done
+[ "$SUITE_FAILED" -ne 0 ] && { echo "VALIDATION SUITE FAILED"; exit 1; }
+
 echo
 echo "REPLAY CLEAN."
 echo "NOTE: a local replay cannot prove cloud-host default-privilege behavior"
