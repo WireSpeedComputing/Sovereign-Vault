@@ -10,6 +10,111 @@ executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
 
+## Scope-bound authority — BUILT, NOT YET APPLIED (2026-08-07)
+
+`sql/30_scope_bound_authority.sql`, `tests/30_scope_bound_authority.sql` (19
+assertions, all passing), `docs/05-scope-bound-authority.md`, and
+`pending/D_scope_hierarchy.sql` with a 14-case matrix. ADOPT, upstream #45.
+Designed against the deployed `vault_auth` layer; modifies none of it.
+
+**FINDING: the capability model is not wired to anything.** Nothing in this repo
+calls `has_capability()` or `request_has_capability()` — not one RLS policy, not
+one function, not one view. The authority model is decorative today: a
+well-built lock with no door in the frame.
+
+This is the same shape as the #46 finding. `promote_memory()` looked like a
+chokepoint and was a convenience wrapper; `has_capability()` looks like an
+authorization boundary and is an unreferenced function. `scope_authority_report()`
+reports `enforced = false` for every scope, hardcoded, because reporting
+anything else would be a lie.
+
+Wiring it is a design decision, not a coding task, because `retrieve_context()`
+already filters on owner/visibility. Three options and a recommendation are in
+`docs/05`; the recommended one (scope narrows visibility) fails closed and can
+roll out scope by scope. It also forces a deliberate choice about rows whose
+`workstream` is null, which would otherwise become unreachable to everyone.
+
+**Scope representation.** `<kind>:<identifier>` with kinds
+`workstream|table|record|domain`. There is deliberately **no global kind** — the
+cleanest way to guarantee "never global by default" is for the type system to
+have no way to express it. `scope_registry` must declare a scope before it can
+be granted, enforced by a foreign key from `capability_grants`.
+
+The registry exists because `resource_scope` was free text: a grant on
+`workstream:brnad` inserts cleanly, reads back cleanly, appears in every audit
+view, and authorises nothing. Silent fail-closed is still a defect — the
+operator believes authority was granted. This deployment lost time to exactly
+this failure one layer over, with `issuer='supabase_auth'` written as a label
+instead of the literal `iss` URL.
+
+**Wildcard semantics: decided here, shipped separately**, honouring the prior
+identity review's requirement. Pattern wildcards REJECTED — a pattern grant is
+authority over scopes that do not exist yet, so anything a future operator names
+under that prefix is covered by a grant nobody re-reviewed, and "who can read
+this scope?" stops being answerable as a query. Declared containment CHOSEN:
+scopes form a tree, an ancestor reaches descendants only if it declares
+`confers_descendants`, resolution is over rows rather than patterns, and
+`scope_effective_grants()` names the route for each principal.
+
+Known surprise, documented and pinned as `m03`: `confers_descendants` says what a
+scope does when GRANTED, not whether it transmits when TRAVERSED. Setting it
+false on an intermediate does not seal a subtree.
+
+**Cutover.** `scope_cutover` + `declare_scope_cutover()` declare the vault
+authoritative for a named scope, replacing a prior source — a different question
+from `import_cutover_scorecard`, which is about a source being accounted for.
+
+**A bug the tests caught:** the first draft keyed `scope_cutover` on
+`(scope, declared_at)`. `now()` is transaction time, so two declarations in one
+transaction collided on an identical timestamp while two a second apart — the
+actually-wrong case — were both accepted. Replaced with a surrogate key plus a
+partial unique index on the real invariant: at most one live declaration per
+scope. Timestamps make bad keys.
+
+**Live-testing context folded into the docs:** the identity layer is proven end
+to end (two Auth users over PostgREST, granted returned true, ungranted returned
+false). `issuer` must be the literal `iss` URL. Password-auth tokens carry no
+`client_id`, so the agent half of the intersection model needs an OAuth/MCP
+client flow and cannot be exercised through password auth. Tokens carry
+`session_id`, not `jti`, so per-token revocation must key on `session_id`.
+
+## Migration drift check — BUILT (2026-08-07)
+
+`tests/migration_drift.sh` + `tests/migration_baseline.txt`. Part of upstream
+#58's executable drift inventory.
+
+Three times an applied migration had no repo file: Migrations A and B (existed
+only in a chat transcript) and `36_retrieval_embedding_backlog` (applied via
+`apply_migration`, never filed). Each was caught by a human noticing.
+
+The third was the expensive kind. `retrieval_embedding_backlog()` is the RPC the
+deployed `embed-retrieval-units` edge function calls, so a fresh install from
+this repo produced a database where that function returned 500 on a missing RPC
+— while the schema replayed clean and nothing said the pipeline was broken. Now
+filed as `sql/29_retrieval_embedding_backlog.sql`, transcribed from
+`pg_get_functiondef()`.
+
+The check takes the applied inventory as a file rather than connecting itself: a
+drift checker holding production credentials is a bigger risk than the drift.
+
+**Baseline at `20260729174800`.** The historical mapping onto `sql/00-21` is
+many-to-one and was never recorded; reconstructing it from migration *names*
+would be a guess presented as an inventory. Declaring history out of scope in one
+visible place beats emitting thirty-five reconstructed false positives, which is
+how a checker gets muted. Lowering the baseline is progress; raising it is how a
+check quietly stops checking.
+
+**Verified it can fail, both directions:** deleting `sql/29`'s `MIGRATION:`
+header reported applied-but-uncommitted; removing migration 38 from the
+inventory reported committed-but-unapplied.
+
+Honest limit: inventory only. A repo file whose body has drifted from the
+applied object still reads clean. That is the restore-verification half of #58.
+
+Two deployment migrations are named `36` (distinct versions, colliding names):
+`36_vault_auth_binding_fk_indexes` is folded into `sql/23`,
+`36_retrieval_embedding_backlog` is `sql/29`.
+
 ## perimeter_assert was crying wolf on the deployment — FIXED, NOT YET APPLIED (2026-08-07)
 
 `sql/28_perimeter_assert_signal.sql`. Found while reconciling migration 38.
