@@ -100,7 +100,12 @@ TEST_DIR="$(cd "$(dirname "$0")" && pwd)"
 SUITE_FAILED=0
 echo "== validation suite =="
 for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
-  if grep -q "REQUIRES-DEPLOYMENT" "$tf"; then
+  # Line-anchored, and only in the header. The first version grepped for the
+  # token ANYWHERE in the file, so a test file that merely DESCRIBED the
+  # mechanism in a comment silently opted itself out and was never run --
+  # which happened, to three new suites at once. A skip that can be triggered
+  # by documentation is a skip nobody notices.
+  if head -40 "$tf" | grep -qE '^-- REQUIRES-DEPLOYMENT(:|$)'; then
     echo "  SKIP  $(basename "$tf") (declares REQUIRES-DEPLOYMENT)"
     continue
   fi

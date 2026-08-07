@@ -35,8 +35,25 @@ secrets in a `mktemp -d` fixture and asserts the sweep fails, then asserts it
 passes on a clean fixture containing the same adversarial noise. It also asserts
 the sweep refuses to run without patterns, that a deliberately broken sweep
 never prints the clean verdict, and that a cleanup commit does not hide a leak
-from the history pass. 46 assertions, no fixed ports or paths, safe to run
+from the history pass. 71 assertions, no fixed ports or paths, safe to run
 concurrently.
+
+**A grep preflight, because "portable" was a claim we could not back.** The
+two-pass split depends on grep semantics that are not uniform across
+implementations: `-w` over alternations read from `-f`, case sensitivity by
+default, `-i` as an unanchored substring, `-H -n` emitting exactly
+`path:lineno:text` (every exception regex anchors on that), and `-Fxq` matching
+a whole line. A grep that differs on any of them does not crash — it silently
+changes what "clean" means.
+
+So the sweep no longer claims portability. It proves the properties it needs
+against whatever grep is on the host, at startup, on fixtures with known
+answers, and exits 2 if any fails. We verified it end to end on BSD grep
+2.6.0-FreeBSD and on ugrep 7.5.0; we have **not** run it against GNU grep, which
+is exactly why the preflight exists instead of a compatibility note. Five
+deliberately broken greps are in the suite — one that ignores `-w`, one that is
+always case-insensitive, one whose `-Fxq` matches a prefix, one that is missing,
+and a pass-through control that must *not* trip the preflight.
 
 We mutation-tested the suite rather than trusting a green run: twelve deliberate
 breakages of the sweep (dropping the word-boundary flag, making the
@@ -126,16 +143,39 @@ not to see.
 | Existing public-safe fixtures pass | done — the clean fixture is deliberately stuffed with the lowercase forms of the codenames |
 | No private evidence copied into the implementation | done by construction — the tool contains no patterns; the example config is entirely fabricated |
 | Tracker text, releases, logs, artifacts covered by guidance | done — human checklist |
-| Issue and PR templates include the checklist | **not yet done** in our repo |
+| Issue and PR templates include the checklist | done — `.github/` issue templates, PR template, and `.github/PUBLIC-SAFETY.md` |
 
-Two limitations we would rather state than let a green run imply:
+## The two limitations we reported last time are now failures, not prose
 
-1. **A `--changed` run on an unchanged tree scans zero files.** The script says
-   so explicitly instead of printing "clean", because 0 files scanned and 0
-   findings are different statements — but it is a real gap in any CI that only
-   ever runs in changed mode.
-2. **The history pass is depth-limited.** A leak older than the configured depth
-   is invisible unless `history-depth 0` is set.
+We previously listed these as caveats. Writing them down did not help: both are
+holes that make a run pass while covering nothing, and prose in a README is not
+a control.
+
+1. **A `--changed` run on an unchanged tree scans zero files.**
+2. **The history pass is depth-limited**, so a leak older than the configured
+   depth is invisible.
+
+Both now feed a `--ci` flag. Interactively they stay warnings, because an
+operator reads them. Under `--ci` they are failures, because nobody reads a
+green CI job. `--ci` also implies `--strict`, and the sweep now counts and names
+the unread remainder — `last 20 of 214 commits` and `194 COMMITS NOT SCANNED`
+rather than a bare `last 20 commits`.
+
+The recommended publication gate is `--all --history-depth 0 --ci`.
+
+Each hole has a paired positive control: without `--ci` the run passes and warns,
+with `--ci` the same run fails, and a run that genuinely covered the tree and all
+history still passes under `--ci` — so the flag cannot be satisfied by simply
+failing everything.
+
+Two limitations remain, and we would rather state them than let a green run
+imply otherwise:
+
+1. **The sweep still cannot read non-file surfaces**, which is what the human
+   checklist and the new templates are for. That is structural, not a to-do.
+2. **GNU grep is untested by us.** The preflight means an incompatible grep
+   fails loudly rather than silently, but "fails loudly on GNU grep" and "works
+   on GNU grep" are different claims and we can only make the first.
 
 ## Offer
 
