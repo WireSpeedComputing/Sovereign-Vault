@@ -244,6 +244,31 @@ then compare — which is the restore-verification half of upstream #58 and is n
 this mechanism. Two checks with clean, stated boundaries beat one check that
 does both badly and is muted within a week.
 
+**That other half now exists**, and it closes this hole rather than leaving it
+theoretical: `tests/canonicalize_inventory.py`, driven by `tests/verify_restore.sh`.
+It was built independently and in parallel with this document, so the two were
+reconciled after the fact rather than designed together — worth knowing, because
+they arrived at the same boundary from opposite directions.
+
+Proven on the same `sql/27` case that motivates the exclusion here: the real
+condensed body (920 characters of formatting difference) hashes identical, while
+that same body with **one ACL predicate deleted** (51 characters of meaning)
+hashes different and is caught. Raw `md5` differs in both cases, which is exactly
+why raw text is unusable.
+
+So the division of labour is:
+
+| check | sees | blind to |
+|---|---|---|
+| contract digest (this doc) | signature, security mode, volatility, config, ACL | body changes |
+| canonical definition hash (`#58`) | body, plus everything above | comment-only drift; keyword-case and alias changes report as false drift |
+
+Neither subsumes the other. The digest is cheap enough to run on every call and
+stable enough to pin a contract version; the definition hash is a restore-time
+and audit-time check. Both are asserted against their own limitations —
+`canonicalize_inventory.py --self-test` covers 8 cases in both directions,
+including the two documented failure modes.
+
 ### Version and digest are both required
 
 A digest detects that something changed. It cannot say whether the change is
