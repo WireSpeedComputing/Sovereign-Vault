@@ -1,15 +1,11 @@
--- PENDING OWNER APPROVAL — DO NOT APPLY
+-- 23_wiki_supersession.sql
 --
--- Migration A for upstream issue #71: wiki page supersession.
+-- Wiki page supersession. Upstream issue #71 — CLOSED on this deployment.
 --
--- Placed in pending/ rather than sql/ deliberately: tests/replay_fresh_install.sh
--- globs sql/*.sql, so filing an unapproved migration there would make the
--- replay prove something that is not true of the deployment.
---
--- STATUS: fully built. Dry-run end-to-end against the live database inside a
--- rolled-back transaction on 2026-08-07. All assertions passed; rollback left
--- zero residue (old constraint intact, no new index, no function, no rows).
--- NOT applied to any deployment.
+-- APPLIED as deployment migration 37, 2026-08-07, on owner approval. Was staged
+-- as pending/A_wiki_supersession_ISSUE71.sql until then; moved into sql/ once
+-- applied, so tests/replay_fresh_install.sh (which globs sql/*.sql) now replays
+-- a schema that matches the deployment rather than one that does not.
 --
 -- Preflight verified live before the dry run:
 --   * wiki_pages_path_key UNIQUE (path) present, exactly as upstream #71 found
