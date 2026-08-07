@@ -1,6 +1,34 @@
 -- 27_retrieval_acl_drift_fix.sql
 --
--- NOT YET APPLIED to any deployment.
+-- MIGRATION: 39_retrieval_acl_drift_fix
+--
+-- APPLIED as deployment migration 39 (20260807182313) by the owner.
+--
+-- ── REPO vs APPLIED: EQUIVALENT, NOT IDENTICAL ─────────────────────────────
+-- The applied migration carries a condensed body; this file keeps the full
+-- rationale. Verified after the apply, not assumed:
+--
+--   signature      TABLE(invalidated, repaired_acl_drift, projected_memories,
+--                        projected_wiki)                        -- matches
+--   security mode  SECURITY DEFINER                             -- matches
+--   volatility     v (refresh) / s (retrieval_acl_drift)        -- matches
+--   search_path    public, extensions                           -- matches
+--   ACL            postgres, service_role only                  -- matches
+--   body           semantically identical, textually condensed  -- DIFFERS
+--
+-- Clause by clause the bodies agree: same drift-count predicate, same
+-- invalidation predicate with all three ACL comparisons, same two projection
+-- inserts, same embedding-staleness update, same return order.
+--
+-- But md5(pg_get_functiondef()) differs, and that matters for Task 6: a
+-- definition-level restore check comparing raw text will flag this pair as
+-- drifted forever. It is the concrete case proving that such a check must
+-- canonicalize (normalise whitespace, strip comments) before comparing, or it
+-- becomes another checker that cries wolf. Recorded here rather than silently
+-- reformatting this file to match -- the rationale is why the file exists.
+
+-- Post-apply state, owner-verified 2026-08-07: 133 live units, 0 unprojected,
+-- 0 ACL drift, 0 stale embeddings, 129 of 133 embedded.
 --
 -- Fixes ACL drift in the retrieval projection: a memory or wiki page whose
 -- `visibility`, `owner` or `workstream` changes after projection keeps serving
