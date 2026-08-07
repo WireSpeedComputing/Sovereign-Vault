@@ -26,20 +26,47 @@ asserts the sweep fails, then asserts it passes on a structurally similar clean
 fixture. Run the test suite before trusting a clean result from a config you
 have just edited.
 
-Two properties worth knowing before you rely on a green run:
+Three properties worth knowing before you rely on a green run:
 
 - **A clean `--changed` run on an unchanged tree scans zero files.** The sweep
   says so out loud rather than printing "clean", because 0 files scanned and 0
   findings are not the same statement. Run `--all` before a first publication.
 - **The history pass is depth-limited by config.** A leak older than the
-  configured depth is invisible. Set `history-depth 0` for a repo that has never
-  been swept end to end.
+  configured depth is invisible. The sweep now counts and names the unread
+  remainder rather than reporting only what it read. Set `history-depth 0` for a
+  repo that has never been swept end to end.
+- **`grep` is not one program.** The two-pass split depends on `-w`, default
+  case sensitivity, `-i` as a substring, the `path:lineno:text` output shape and
+  `-Fxq` whole-line matching, and these differ between implementations. A grep
+  that differs does not crash; it changes what "clean" means. The sweep
+  therefore proves those properties against the host's grep at startup and exits
+  2 if any fails. Exit 2 is never a pass.
+
+### Use `--ci` when the run is a gate
+
+The first two properties above are the reason `--ci` exists. Interactively they
+are warnings an operator reads. In an unattended job nobody reads them, and the
+job stays green forever while covering nothing:
+
+```sh
+contrib/rule0-sweep.generic.sh --config /private/path/sweep.config \
+  --all --history-depth 0 --ci .
+```
+
+`--ci` turns "scanned zero files", "stale exception", and "older commits never
+read" into failures, and implies `--strict`. A CI job wired only to `--changed`
+is the specific shape this is guarding against.
 
 ## Surfaces the scanner cannot see
 
 The scanner reads the working tree and git history. Everything below is a
 publication surface it never touches. Each one has shipped a leak somewhere, in
 some project, for the same reason: it does not feel like publishing.
+
+The issue and PR templates in `.github/` embed a short version of these
+sections, so the checklist appears at the moment the text is being written
+rather than in a document nobody opens. `.github/PUBLIC-SAFETY.md` is the bridge
+between them and this page; this page remains the authority.
 
 ### Issue bodies
 

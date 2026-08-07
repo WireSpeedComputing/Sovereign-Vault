@@ -90,6 +90,36 @@
 # review checklist.
 #
 # ---------------------------------------------------------------------------
+# GREP PORTABILITY — WHY THE TOOL TESTS ITS OWN GREP BEFORE IT TRUSTS A RESULT
+# ---------------------------------------------------------------------------
+# This sweep's two-pass design rests entirely on grep semantics that are NOT
+# uniform across implementations:
+#
+#   * `-w` (whole-word) applied to alternations read from `-f FILE`
+#   * case sensitivity being the default, so pass 2 does not fire on prose
+#   * `-i` matching as an unanchored SUBSTRING, so pass 1 catches leaks inside
+#     URLs and camelCase
+#   * `-H -n` producing exactly `path:lineno:text`, which every declared
+#     exception regex anchors on
+#   * `-Fxq` matching a WHOLE line, which the file-dedup pass relies on
+#
+# If any of those differ, the sweep does not crash. It silently reports the
+# wrong thing — usually "clean" — which is the single worst failure available to
+# a leak checker. Claiming "portable" in a comment does not make it so, and the
+# author cannot test every grep a user will have.
+#
+# So the tool does not claim portability. It PROVES the properties it needs
+# against whatever grep is actually on this host, at startup, on fixtures with
+# known answers, and exits 2 if any of them does not hold. An unverified grep is
+# an environment error, never a pass.
+#
+# Verified by the author on: BSD grep 2.6.0-FreeBSD (macOS /usr/bin/grep) and
+# ugrep 7.5.0. NOT tested by the author against GNU grep — which is precisely
+# why the preflight exists rather than a compatibility claim.
+#
+# Set RULE0_GREP=/path/to/grep to pin a specific implementation.
+#
+# ---------------------------------------------------------------------------
 # USAGE
 # ---------------------------------------------------------------------------
 #   rule0-sweep.generic.sh --config /private/path/sweep.config [options] REPO
@@ -100,7 +130,11 @@
 set -uo pipefail
 
 PROG="$(basename "$0")"
-VERSION="1.0.0"
+VERSION="1.1.0"
+
+# Which grep to use. Must be a bare path with no embedded arguments: it is also
+# handed to xargs as a command name. See the GREP PORTABILITY note below.
+GREP="${RULE0_GREP:-grep}"
 
 EXIT_CLEAN=0
 EXIT_FINDINGS=1
@@ -124,14 +158,38 @@ OPTIONS
   --no-history       Skip the git-history pass.
   --history-depth N  Commits of history to scan (0 = all). Overrides config.
   --strict           Stale exceptions (suppressed nothing) become failures.
+  --ci               Gate mode. Turns every "scanned nothing" hole into a
+                     failure instead of a warning. Implies --strict. See below.
   --quiet            Print findings and the verdict only.
   --version          Print version and exit.
   -h, --help         This text.
 
+CI MODE
+  A sweep that scanned nothing passes. In an interactive run that is a warning
+  you read; in an automated gate nobody reads it, and the job is green forever
+  while covering nothing. --ci makes all three of those holes hard failures:
+
+    1. Zero files scanned in --changed or --base mode. A --changed run on an
+       unchanged tree scans no files at all, so a CI job wired only to that mode
+       has a permanent hole.
+    2. A stale exception (implies --strict).
+    3. Unscanned git history. With a non-zero history-depth, a leak older than
+       the depth is invisible; --ci requires history-depth 0 whenever older
+       commits exist, or an explicit --no-history to say the pass was skipped on
+       purpose.
+
+  Use --all --history-depth 0 --ci for a publication gate.
+
+ENVIRONMENT
+  RULE0_SWEEP_CONFIG  Default for --config.
+  RULE0_GREP          grep implementation to use (default: grep). Must be a
+                      path with no embedded arguments. Whatever it names is
+                      semantically preflighted before any pass runs.
+
 EXIT CODES
   0  clean
   1  findings — review each one before publishing
-  2  usage or config error (NOT a pass)
+  2  usage, config, or grep-environment error (NOT a pass)
 
 CONFIG FORMAT
   One directive per line. '#' starts a comment only at the start of a line.
@@ -170,6 +228,7 @@ DO_HISTORY=1
 HISTORY_DEPTH=""
 STRICT=0
 QUIET=0
+CI=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -182,6 +241,7 @@ while [ $# -gt 0 ]; do
     --no-history)    DO_HISTORY=0; shift ;;
     --history-depth) [ $# -ge 2 ] || die "--history-depth needs a value"; HISTORY_DEPTH="$2"; shift 2 ;;
     --strict)        STRICT=1; shift ;;
+    --ci)            CI=1; STRICT=1; shift ;;
     --quiet)         QUIET=1; shift ;;
     --version)       printf '%s %s\n' "$PROG" "$VERSION"; exit 0 ;;
     -h|--help)       usage; exit 0 ;;
@@ -208,6 +268,72 @@ CONFIG_ABS="$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG")"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rule0sweep.XXXXXX")" || die "mktemp failed"
 trap 'rm -rf "$WORK"' EXIT INT TERM HUP
+
+# --------------------------------------------------------------------------
+# grep preflight — prove the semantics this tool depends on, on THIS host
+# --------------------------------------------------------------------------
+# Every assertion below has a known answer and is paired: something the flag
+# must match and something structurally similar it must not. A grep that fails
+# any of them would not crash the sweep, it would quietly change what "clean"
+# means, so this is a hard stop rather than a warning.
+preflight_grep() {
+  command -v "$GREP" >/dev/null 2>&1 || die "grep not found: '$GREP' (set RULE0_GREP to a valid path)"
+
+  local d="$WORK/greppf"
+  mkdir -p "$d" || die "cannot create $d"
+  local pat="$d/pat" subj="$d/subj" out n bad=""
+
+  printf 'PRINTF\nMAIN\n' >"$pat"
+  printf 'the PRINTFOO helper\nthe PRINTF service\nlowercase main branch\nzzTOKENzz\n' >"$subj"
+
+  # -w whole-word + case-sensitive default + -H -n output shape, all at once,
+  # because that is exactly how pass 2 invokes it.
+  out="$("$GREP" -n -H -w -E -f "$pat" "$subj" 2>/dev/null)"
+  case "$out" in *PRINTFOO*)          bad="$bad
+    -w matched inside a longer word (PRINTFOO); pass 2 would flood with noise" ;; esac
+  case "$out" in *"the PRINTF service"*) : ;; *) bad="$bad
+    -w failed to match a whole word; pass 2 would MISS real codename leaks" ;; esac
+  case "$out" in *"lowercase main"*)  bad="$bad
+    matching was case-insensitive by default; pass 2 would fire on ordinary prose" ;; esac
+  case "$out" in "$subj":[0-9]*:*)    : ;; *) bad="$bad
+    -H -n did not produce 'path:lineno:text'; every exception regex anchors on it" ;; esac
+
+  # -i as an UNANCHORED SUBSTRING, which is what pass 1 relies on.
+  printf 'tok\n' >"$pat"
+  out="$("$GREP" -i -E -f "$pat" "$subj" 2>/dev/null)"
+  case "$out" in *TOKEN*) : ;; *) bad="$bad
+    -i did not match a case-folded substring; pass 1 would miss leaks in URLs and camelCase" ;; esac
+
+  # -c and -v, used to count and remove exception-suppressed lines. If -c were
+  # wrong an exception would report the wrong suppression count; if -v were
+  # wrong it would delete the wrong lines.
+  printf 'aaa\nbbb\naaa\n' >"$subj"
+  n="$("$GREP" -c -E -- 'aaa' "$subj" 2>/dev/null)"
+  [ "$n" = "2" ] || bad="$bad
+    -c returned '$n' where 2 is correct; exception suppression counts would be wrong"
+  out="$("$GREP" -v -E -- 'aaa' "$subj" 2>/dev/null)"
+  [ "$out" = "bbb" ] || bad="$bad
+    -v did not invert cleanly; exceptions would remove the wrong lines"
+
+  # -Fxq must match a WHOLE line. The file-dedup pass uses it, so a prefix match
+  # here would silently drop files from the scan.
+  "$GREP" -Fxq -- 'bbb' "$subj" 2>/dev/null || bad="$bad
+    -Fxq failed on an exact whole-line match"
+  if "$GREP" -Fxq -- 'bb' "$subj" 2>/dev/null; then bad="$bad
+    -Fxq matched a line PREFIX; files would be silently dropped from the scan"; fi
+
+  if [ -n "$bad" ]; then
+    printf '%s: error: grep preflight failed for '\''%s'\''.\n' "$PROG" "$GREP" >&2
+    printf '%s\n' "$bad" >&2
+    printf '
+       This grep does not have the semantics the sweep is built on. It would not
+       crash — it would silently change what "clean" means. Refusing to run.
+       Set RULE0_GREP to a grep that passes, or run the test suite to see which
+       property broke.\n' >&2
+    exit "$EXIT_CONFIG"
+  fi
+}
+preflight_grep
 
 HARD_RE="$WORK/hard.re"
 NAME_RE="$WORK/name.re"
@@ -374,7 +500,7 @@ while IFS= read -r -d '' f; do
   case "$f" in .git/*|*/.git/*) continue ;; esac
   [ -n "$CONFIG_REL" ] && [ "$f" = "$CONFIG_REL" ] && continue
   [ -f "$f" ] || continue           # deleted / renamed-away paths
-  grep -Fxq -- "$f" "$SEEN" 2>/dev/null && continue
+  "$GREP" -Fxq -- "$f" "$SEEN" 2>/dev/null && continue
   printf '%s\n' "$f" >>"$SEEN"
   if [ -s "$INC_GLOB" ] && ! matches_any_glob "$f" "$INC_GLOB"; then continue; fi
   if matches_any_glob "$f" "$EXC_GLOB"; then continue; fi
@@ -394,10 +520,10 @@ apply_exceptions() { # $1 = hits file (modified in place), $2 = scope
   while IFS='|' read -r id scope re just exp; do
     [ -n "$id" ] || continue
     if [ "$scope" != "$2" ] && [ "$scope" != "all" ]; then continue; fi
-    n="$(grep -c -E -- "$re" "$1" 2>/dev/null)" || n=0
+    n="$("$GREP" -c -E -- "$re" "$1" 2>/dev/null)" || n=0
     case "$n" in ''|*[!0-9]*) n=0 ;; esac
     if [ "$n" -gt 0 ]; then
-      grep -v -E -- "$re" "$1" >"$1.tmp" 2>/dev/null
+      "$GREP" -v -E -- "$re" "$1" >"$1.tmp" 2>/dev/null
       mv "$1.tmp" "$1"
     fi
     printf '%s %s\n' "$id" "$n" >>"$EXC_HITS"
@@ -408,6 +534,10 @@ say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
 FOUND=0
 PASSES_RUN=""
+CI_HOLES=""   # things that scanned nothing; warnings normally, failures under --ci
+
+note_hole() { CI_HOLES="$CI_HOLES
+  - $1"; }
 
 report_pass() { # $1 = label, $2 = hits file
   local n
@@ -437,9 +567,11 @@ if [ "$FILE_COUNT" -eq 0 ]; then
     say "  NO FILES SCANNED — nothing changed in this diff."
     say "  This is NOT a clean bill of health for the tree. Run with --all"
     say "  before a first publication or after a history rewrite."
+    note_hole "zero files scanned in --$EFFECTIVE_MODE mode: the file passes covered nothing"
   else
     say "  NO FILES SCANNED — the include/exclude globs matched nothing."
     say "  Check the config; an empty file list always 'passes'."
+    note_hole "zero files scanned in --all mode: the include/exclude globs matched nothing"
   fi
   say ""
 else
@@ -448,7 +580,7 @@ else
 
   if [ "$N_HARD" -gt 0 ]; then
     say "== pass 1: hard identifiers (case-insensitive, substring) =="
-    xargs -0 grep -n -H -i -E -f "$HARD_RE" -- <"$FILE_LIST" >"$WORK/p1" 2>/dev/null
+    xargs -0 "$GREP" -n -H -i -E -f "$HARD_RE" -- <"$FILE_LIST" >"$WORK/p1" 2>/dev/null
     apply_exceptions "$WORK/p1" files
     report_pass "pass1" "$WORK/p1"
     cat "$WORK/p1" >>"$FILE_HITS"
@@ -459,7 +591,7 @@ else
     say "== pass 2: names (case-SENSITIVE, whole-word) =="
     say "  # case-sensitive + whole-word so shell builtins and git ref names do"
     say "  # not fire on codenames spelled in caps. See the header."
-    xargs -0 grep -n -H -w -E -f "$NAME_RE" -- <"$FILE_LIST" >"$WORK/p2" 2>/dev/null
+    xargs -0 "$GREP" -n -H -w -E -f "$NAME_RE" -- <"$FILE_LIST" >"$WORK/p2" 2>/dev/null
     apply_exceptions "$WORK/p2" files
     report_pass "pass2" "$WORK/p2"
     say ""
@@ -471,20 +603,37 @@ fi
 # pass 3: git history
 # --------------------------------------------------------------------------
 if [ "$DO_HISTORY" -eq 1 ] && [ "$IS_GIT" -eq 1 ] && [ "$HAS_COMMITS" -eq 1 ]; then
+  # How much history is there, and how much are we actually reading? A leak
+  # older than the depth is invisible, and "last 20 commits: clean" reads as
+  # "history: clean" to everyone who is not the person who wrote the flag. So
+  # the unscanned remainder is counted and named rather than left implicit.
+  TOTAL_COMMITS="$(git rev-list --count HEAD 2>/dev/null)" || TOTAL_COMMITS=0
+  case "$TOTAL_COMMITS" in ''|*[!0-9]*) TOTAL_COMMITS=0 ;; esac
+  UNSCANNED_COMMITS=0
+
   if [ "$HISTORY_DEPTH" -eq 0 ]; then
-    say "== pass 3: git history (all commits) =="
+    say "== pass 3: git history (all $TOTAL_COMMITS commits) =="
     git log -p --no-color 2>/dev/null >"$WORK/hist"
   else
-    say "== pass 3: git history (last $HISTORY_DEPTH commits) =="
+    if [ "$TOTAL_COMMITS" -gt "$HISTORY_DEPTH" ]; then
+      UNSCANNED_COMMITS=$((TOTAL_COMMITS - HISTORY_DEPTH))
+    fi
+    say "== pass 3: git history (last $HISTORY_DEPTH of $TOTAL_COMMITS commits) =="
     git log -n "$HISTORY_DEPTH" -p --no-color 2>/dev/null >"$WORK/hist"
+    if [ "$UNSCANNED_COMMITS" -gt 0 ]; then
+      say "  $UNSCANNED_COMMITS COMMITS NOT SCANNED — a leak older than depth"
+      say "  $HISTORY_DEPTH is invisible to this run, and deleting a file does not"
+      say "  remove it from those commits. Set 'history-depth 0' to cover them."
+      note_hole "$UNSCANNED_COMMITS of $TOTAL_COMMITS commits were never read (history-depth $HISTORY_DEPTH)"
+    fi
   fi
 
   : >"$WORK/p3"
   if [ "$N_HARD" -gt 0 ]; then
-    grep -n -i -E -f "$HARD_RE" "$WORK/hist" 2>/dev/null | sed 's|^|history:|' >>"$WORK/p3"
+    "$GREP" -n -i -E -f "$HARD_RE" "$WORK/hist" 2>/dev/null | sed 's|^|history:|' >>"$WORK/p3"
   fi
   if [ "$N_NAME" -gt 0 ]; then
-    grep -n -w -E -f "$NAME_RE" "$WORK/hist" 2>/dev/null | sed 's|^|history:|' >>"$WORK/p3"
+    "$GREP" -n -w -E -f "$NAME_RE" "$WORK/hist" 2>/dev/null | sed 's|^|history:|' >>"$WORK/p3"
   fi
   apply_exceptions "$WORK/p3" history
 
@@ -502,6 +651,8 @@ elif [ "$DO_HISTORY" -eq 1 ]; then
   say "== pass 3: git history =="
   say "  SKIPPED — no git history available here."
   say ""
+  # Not a deliberate --no-history: the pass was requested and covered nothing.
+  note_hole "the git-history pass was requested but no history was available"
 fi
 
 # --------------------------------------------------------------------------
@@ -546,6 +697,24 @@ fi
 if [ "$STALE" -eq 1 ] && [ "$STRICT" -eq 1 ]; then
   printf 'SWEEP FAILED (--strict) — stale exception(s) above suppressed nothing.\n'
   exit "$EXIT_FINDINGS"
+fi
+
+# A run that scanned nothing found nothing. Interactively that is a warning the
+# operator reads; in an unattended gate nobody reads it, and the job stays green
+# forever while covering nothing. --ci is the switch that says "this run is a
+# gate", and under it coverage holes are failures rather than prose.
+if [ -n "$CI_HOLES" ]; then
+  if [ "$CI" -eq 1 ]; then
+    printf 'SWEEP FAILED (--ci) — the run passed, but it did not cover anything:\n'
+    printf '%s\n' "$CI_HOLES"
+    printf '\nA gate that scans nothing reports clean forever. Fix the coverage or\n'
+    printf 'drop --ci and accept that this run is not a gate. For a publication\n'
+    printf 'gate use: --all --history-depth 0 --ci\n'
+    exit "$EXIT_FINDINGS"
+  fi
+  say "== coverage holes (these would fail under --ci) =="
+  say "$CI_HOLES"
+  say ""
 fi
 
 printf 'SWEEP CLEAN — file and history patterns found nothing.\n'
