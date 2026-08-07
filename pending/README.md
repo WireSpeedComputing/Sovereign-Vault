@@ -10,7 +10,8 @@ Nothing in this directory has been applied to any deployment.
 
 | File | Upstream | State |
 |---|---|---|
-| `B_retrieval_topology_ISSUE72.sql` | #72 | **Partial.** Part 1 (table + seed) dry-run tested. Part 2 (the `retrieve_context` envelope change) is a design note only — not written, not tested. |
+| `B_retrieval_topology_ISSUE72.sql` | #72 | **Complete, replay-tested.** Part 1 (table + seed) dry-run tested; Part 2 (the `retrieve_context` envelope) built and tested 2026-08-07, 24 assertions in `B_retrieval_topology_TEST.sql`. ⚠ Public signature change — new `retrieval_status` value. |
+| `E_rls_policies.sql` | our #11 | **Complete, replay-tested.** RLS policies + the shared access predicate. 17 assertions in `E_rls_policies_TEST.sh`, plus a mutation control. Apply AFTER `sql/30` and `B_…ISSUE72.sql` — see the file header. |
 | `C_retrieval_projection_refresh.sql` | — | **Complete, untested against a deployment.** Incremental per-row maintenance of the retrieval projection. Replay-tested only. |
 | `D_scope_hierarchy.sql` | #45 | **Complete, replay-tested.** Declared containment for scopes — the separate change the prior identity review required. 14-case test matrix in `D_scope_hierarchy_TEST.sql`, all passing. Widens authority: read the review note in the header before applying. |
 
@@ -48,3 +49,15 @@ child scopes one at a time and check `scope_effective_grants()` after each. A
 scope tree built in one motion is a tree nobody reviewed. Note also that
 `confers_descendants = false` on an intermediate does NOT seal a subtree — see
 the header.
+
+## A note on this file
+
+This table said Part 2 of B was "a design note only -- not written, not tested"
+for hours after Part 2 was built and tested, and was caught by an agent reading
+it rather than the file it describes. That is the second stale-summary defect
+found today, after STATUS.md kept "NOT YET APPLIED" on an applied migration.
+
+Both have the same shape: the artifact was updated, the index that points at it
+was not. An index that disagrees with what it indexes is worse than no index,
+because it is the cheaper thing to read. When a pending file changes state,
+change this table in the same commit.

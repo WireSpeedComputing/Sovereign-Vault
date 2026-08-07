@@ -1,10 +1,13 @@
 # Contract version and instruction drift
 
-**Status: DESIGN. Nothing here is implemented, and nothing here has been
-applied.** No function described below exists in this repo or on any
-deployment. Every claim about what the schema *does today* is cited to the file
-and line it was read from; every claim about what *should* exist is marked as a
-proposal.
+**Status: DESIGN, with one runnable prototype.** No *SQL* function described
+below exists in this repo or on any deployment, and nothing here has been
+applied. The single exception is the extraction-and-search half of the Part 4
+probe, which exists as `contrib/predll-signature-probe.sh` with its own
+positive-control test; Part 4 marks precisely how much of itself that covers.
+
+Every claim about what the schema *does today* is cited to the file and line it
+was read from; every claim about what *should* exist is marked as a proposal.
 
 Adopts upstream `sovereign-memory-core#70`.
 
@@ -15,10 +18,16 @@ deployment's live operating instructions still teach the old signature, and a
 fresh agent follows them the moment it boots. Repository CI cannot see those
 instructions — they are private deployment data — so nothing catches it.
 
-This is not hypothetical here. It has happened three times in this repo, and
+This is not hypothetical here. It has happened **four** times in this repo, and
 each instance is recorded below with the file and line it was read from.
 
-## Three confirmed instances
+Instances 1–3 are applied to a deployment. Instance 4 is written, tested, and
+**not applied** — it sits in `pending/`. It is listed anyway, and listed last,
+because it is the only one of the four that the design in this document **would
+not catch**, and a design is better judged against the case it misses than
+against the three it was derived from.
+
+## Four confirmed instances
 
 ### 1. `supersede_memory()` lost its 5-argument form
 
@@ -80,6 +89,69 @@ This third instance is a different shape from the first two. Instances 1 and 2
 are *repo changed, instructions stale*. Instance 3 is *deployment changed, repo
 stale*. A contract version has to be able to express both directions or it only
 solves half the problem.
+
+### 4. `retrieve_context()` gained a third `retrieval_status` value
+
+`pending/B_retrieval_topology_ISSUE72.sql` — **NOT APPLIED to any deployment.**
+
+- Header lines 1 and 14–18: filed under `PENDING OWNER APPROVAL — DO NOT APPLY`.
+  Part 2 is recorded there as `BUILT AND TESTED 2026-08-07`, with assertions in
+  `pending/B_retrieval_topology_TEST.sql`, "all passing on a fresh PG17 replay
+  with Part 1 applied. NOT applied."
+- Lines 19–21 label it in the file itself: "⚠ PART 2 IS A PUBLIC SIGNATURE
+  CHANGE to the most widely-used function in this schema. The envelope gains
+  three keys and retrieval_status gains a THIRD VALUE. Any caller that switches
+  exhaustively on retrieval_status … "
+- Lines 83–86 enumerate the new domain: `not_evaluated`, `evaluated`, and the
+  new `evaluated_partial_coverage`. Lines 208–211 are the `case` that emits it.
+- The old two-value domain is confirmed in `sql/21_governed_retrieval.sql`
+  line 215, and in `tests/21_transition_custody_and_retrieval.sql` lines 76 and
+  81, which assert `= 'not_evaluated'` and `= 'evaluated'`.
+
+Line 91 states the breakage directly: "A caller that silently treats an unknown
+status as 'evaluated' was already wrong."
+
+### Why instance 4 is the important one
+
+Instances 1 and 2 move `pg_get_function_result`. Instance 3 moves the whole
+function into existence. All three are visible to the Tier A digest designed in
+Part 2.
+
+**Instance 4 moves nothing the digest reads.** Compared line by line against
+`sql/21_governed_retrieval.sql`:
+
+| Tier A element | `sql/21` | `pending/B` | differs? |
+|---|---|---|---|
+| `proname` | `retrieve_context` | `retrieve_context` | no |
+| `pg_get_function_arguments` | `(uuid, text, vector(384) default null, int default 8000, int default 20)`, same parameter names — `sql/21` lines 139–144 | identical — `pending/B` lines 114–119 | no |
+| `pg_get_function_result` | `jsonb` (line 145) | `jsonb` (line 120) | **no** |
+| `prosecdef` | `security definer` (line 146) | `SECURITY DEFINER` (line 121) | no |
+| `provolatile` | unspecified → `volatile` | unspecified → `volatile` | no |
+| `proconfig` | `search_path = public, extensions` | identical | no |
+| ACL | `revoke execute … from anon, authenticated, public` (lines 243–244) | identical (lines 258–259) | no |
+
+There is no `drop function` in the file — it is a `CREATE OR REPLACE`
+(line 114).
+
+So the contract digest specified in Part 2 is **byte-identical before and
+after**, and `contract_version` would not bump unless a human noticed by hand.
+The thing that changed is the value domain of a string field *inside* a `jsonb`
+return value, and `jsonb` is structurally opaque to every element of the tuple.
+
+The general statement is worth making plainly, because it is not specific to
+this function:
+
+> **Any function returning `jsonb` has an unversioned contract under this
+> design.** The digest pins the envelope's existence, never its shape. A key
+> added, a key removed, or an enumerated value widened are all invisible.
+
+`retrieve_context()` is, by this file's own description, "the most widely-used
+function in this schema", and it returns `jsonb` deliberately — `sql/21` header
+line 19: "a jsonb envelope, never a bare rowset". The design's blind spot is
+therefore centred exactly on its most-used surface. That is not an argument
+against the digest; it is an argument against reporting a green digest as
+"contract unchanged". See "What this digest deliberately cannot see" below,
+which this instance turns from a theoretical caveat into a demonstrated one.
 
 ## What `migration_drift.sh` already covers, and what it does not
 
@@ -237,6 +309,25 @@ Notes that are load-bearing rather than decorative:
 Body changes. A rewrite of `retrieve_context()`'s ranking that keeps the same
 signature does not move the digest.
 
+**Instance 4 is exactly this case, and it is not a rewrite of ranking — it is a
+public contract break.** The envelope gains three keys and `retrieval_status`
+gains a third value, while every element of the Tier A tuple stays identical.
+So "body change" and "harmless" are not synonyms, and this section was
+originally written as though they were. What the digest cannot see is not
+merely *implementation*; it is **everything about the shape of a `jsonb`
+return**, which for this schema is the primary caller-facing contract.
+
+Two consequences that have to be carried forward rather than filed as a caveat:
+
+1. A green digest means *the callable surface did not move*. It does not mean
+   *callers are safe*. Any report that renders it as "contract unchanged" is
+   overclaiming, and `agent_contract()` in Part 3 must not phrase it that way.
+2. Semver (below) cannot be driven off the digest for `jsonb`-returning
+   functions. Instance 4 is a MAJOR change — a caller switching exhaustively on
+   `retrieval_status` breaks — and the digest offers no signal at all. For those
+   functions the version bump is a purely human obligation, which is the weakest
+   possible control and should be named as such rather than assumed.
+
 This is a real hole and it is accepted knowingly, because the alternative is the
 permanent false positive proved by `sql/27`. The body belongs to a separate,
 canonicalizing definition-level check — normalize whitespace, strip comments,
@@ -260,8 +351,15 @@ So the division of labour is:
 
 | check | sees | blind to |
 |---|---|---|
-| contract digest (this doc) | signature, security mode, volatility, config, ACL | body changes |
+| contract digest (this doc) | signature, security mode, volatility, config, ACL | body changes — **including `jsonb` envelope shape and enumerated value domains, i.e. instance 4** |
 | canonical definition hash (`#58`) | body, plus everything above | comment-only drift; keyword-case and alias changes report as false drift |
+
+Instance 4 would be caught by the canonical definition hash, since the body
+genuinely changed. But it would be reported as *body drift*, indistinguishable
+from a whitespace-surviving refactor, and `#58`'s check is a restore-time and
+audit-time check rather than a pre-DDL gate. So the break is detectable after
+the fact and by the wrong tool, which is close enough to "not caught" that it
+should be recorded as a gap rather than as coverage.
 
 Neither subsumes the other. The digest is cheap enough to run on every call and
 stable enough to pin a contract version; the definition hash is a restore-time
@@ -283,7 +381,7 @@ convention:
 
 | bump | meaning | worked example |
 |---|---|---|
-| MAJOR | a signature was removed, narrowed, or its result shape changed | instance 1 (`sql/20` line 147), instance 2 (`sql/27` line 113) |
+| MAJOR | a signature was removed, narrowed, or its result shape changed — **including the shape or value domain of a `jsonb` envelope** | instance 1 (`sql/20` line 147), instance 2 (`sql/27` line 113), instance 4 (`pending/B` lines 19–21) |
 | MINOR | a signature was added; nothing existing changed | `retrieval_acl_drift()` added in `sql/27` line 215 |
 | PATCH | ACL, volatility, or `search_path` changed without changing callability | `sql/25`'s grant to `authenticated` |
 
@@ -294,6 +392,20 @@ declaring it, which is instance 3's shape.
 ## Part 3 — First-call introspection
 
 ### There is no `session_boot()`
+
+> **⚠ THIS SECTION IS STALE AS OF WO-09.** An untracked
+> `sql/32_session_boot.sql` appeared in the working tree while this document was
+> being revised, defining
+> `create or replace function public.session_boot(p_principal_id uuid)` at line
+> 108. It is owned by concurrent work, is not committed, and was not reviewed
+> here, so the section below is left exactly as it was written rather than
+> half-corrected. **Re-verify before relying on any of it.** If that file lands,
+> the proposed `agent_contract()` is an extension of an existing first-call
+> surface, not a new one, and the reachability argument changes accordingly.
+>
+> Recording this rather than quietly rewriting the paragraph, because a document
+> about instructions going stale against a moving schema should demonstrate the
+> failure honestly when it happens to itself.
 
 `#70` says "Expose that version/digest through `session_boot()` or another
 first-call introspection surface."
@@ -461,6 +573,36 @@ Silence is not a pass. If the corpus path is empty, unreadable, or older than
 the last instruction edit, the probe exits *unattested* and blocks, for the same
 reason `unaudited` is not folded into `match`.
 
+### Instance 4 defeats all three extraction rules
+
+Run the three rules above against `pending/B_retrieval_topology_ISSUE72.sql`:
+
+1. **Explicit drops** — there are none. Confirmed: no `drop function` anywhere
+   in the file.
+2. **Silent reshapes** — `pg_get_function_result` is `jsonb` before and after.
+   No difference to detect.
+3. **Argument-list narrowing** — the argument list is character-identical.
+
+The probe extracts nothing, searches for nothing, and reports clean on a file
+that its own header calls a "PUBLIC SIGNATURE CHANGE".
+
+A fourth extraction rule is therefore required, and it is weaker than the other
+three because it cannot be derived from catalog metadata:
+
+4. **Declared envelope-domain changes.** A `create or replace` whose new body
+   introduces a `jsonb` key or an enumerated string value that the previous body
+   did not emit. Detecting this mechanically means diffing the string literals
+   reachable from `jsonb_build_object` between two bodies — doable, noisy, and
+   not something a signature probe should pretend to do well.
+
+The honest interim is a declaration: a migration that changes an envelope
+**must** say so in its header, and the probe blocks on a `create or replace` of
+a `jsonb`-returning function that carries no such declaration. That converts an
+undetectable break into a required sentence, which is a real control even though
+it is not a mechanical one. `pending/B` already writes that sentence
+unprompted (lines 19–21), so the convention is being followed by hand today and
+the probe would only be making it mandatory.
+
 ### What it cannot do
 
 It greps text. An instruction that describes the old behaviour in prose without
@@ -468,6 +610,22 @@ naming an identifier — "the refresh returns three counts" — will not be foun
 Stating that here so a green probe run is not over-read, in the same spirit as
 `tests/migration_drift.sh` lines 185–187: "NOTE: inventory only… a file present
 but stale still reads as clean here."
+
+It also cannot see instance 4's class without rule 4 above, and rule 4 depends
+on a human writing a header line.
+
+### Prototype status
+
+`contrib/predll-signature-probe.sh` implements the **extraction and search**
+half of this design and nothing else: it parses drop/create targets out of a
+pending `.sql` file, derives the three pattern families, and searches an
+operator-supplied instruction corpus. It does not read a Tier A snapshot, so
+rule 2 (silent reshapes) is limited to what the DDL text itself reveals, and it
+does not implement rule 4.
+
+It has its own positive control — `contrib/predll-signature-probe.test.sh` —
+which proves it flags an instruction file teaching a removed signature and does
+**not** flag an unrelated one. The rest of this document remains design only.
 
 ## Part 5 — Post-migration receipt and mismatch behaviour
 
@@ -550,3 +708,18 @@ function does, and this document does not claim to.
   instruction surface is deployment data and is not in this repository. The
   operator defines the export; the probe defines only what it searches for.
 - No degraded mode exists. Part 5 is a specification, not a description.
+- **The digest is blind to `jsonb` envelope shape**, which is instance 4 and is
+  the single largest hole in this design. Every caller-facing function in this
+  schema that returns an envelope — `retrieve_context()`,
+  `retrieval_embedding_coverage()`, `agent_contract()` itself — has an
+  unversioned contract under Part 2. Rule 4 in Part 4 is the proposed partial
+  mitigation and it depends on a human writing a header line.
+- **`pending/README.md` contradicts `pending/B_retrieval_topology_ISSUE72.sql`
+  about instance 4's status.** The README's table says Part 2 is "a design note
+  only — not written, not tested"; the file header says "BUILT AND TESTED
+  2026-08-07 (WO-08 Task 8)" with a passing test file. The file is the later and
+  more specific record, and `pending/B_retrieval_topology_TEST.sql` exists, so
+  the README is stale. Not corrected here because this document does not own
+  `pending/`. Worth noting that this is the same failure the whole document is
+  about — an index describing a thing it no longer matches — reproduced inside
+  the repo's own documentation.

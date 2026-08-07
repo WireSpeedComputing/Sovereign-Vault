@@ -302,6 +302,127 @@ if [ "$RC" -ne 0 ]; then ok "a broken sweep never reports clean (exit $RC)"; els
 expect_lacks "SWEEP CLEAN" "a broken sweep does not print the clean verdict"
 
 # ===========================================================================
+section "grep preflight: a grep with the wrong semantics is an ERROR, not a pass"
+# ===========================================================================
+# The sweep's whole design rests on grep behaviour that differs between
+# implementations. The preflight only means something if it can fail, so each
+# property is broken deliberately here with a shim and the sweep must refuse to
+# run. The shims are crude arg-filters — they only have to survive the preflight
+# itself, which is the last thing that happens before the sweep gives up.
+REALGREP="$(command -v grep)"
+[ -n "$REALGREP" ] || { echo "no grep on PATH" >&2; exit 1; }
+
+mk_shim() { # $1 = shim name, $2 = arg to drop (or ADD:<flag> to inject)
+  local path="$ROOT/$1"
+  case "$2" in
+    ADD:*)
+      cat >"$path" <<EOS
+#!/bin/sh
+exec "$REALGREP" ${2#ADD:} "\$@"
+EOS
+      ;;
+    *)
+      cat >"$path" <<EOS
+#!/bin/sh
+A=""
+for x in "\$@"; do
+  [ "x\$x" = "x$2" ] && continue
+  A="\$A \$x"
+done
+exec "$REALGREP" \$A
+EOS
+      ;;
+  esac
+  chmod +x "$path"
+  printf '%s' "$path"
+}
+
+# negative control FIRST: a pass-through shim must NOT trip the preflight.
+# Without this, "the preflight fails" proves only that the shim is broken.
+PASSTHRU="$(mk_shim grep-passthru DROP-NOTHING)"
+OUT="$(RULE0_GREP="$PASSTHRU" bash "$SWEEP" --config "$ROOT/sweep.config" --all "$ROOT/clean" 2>&1)"; RC=$?
+expect_rc 0 "pass-through grep shim still passes the preflight (control)"
+expect_has "SWEEP CLEAN" "pass-through shim reaches a real verdict"
+
+# -w ignored: the codename pass would fire on every longer word containing it.
+NOWORD="$(mk_shim grep-noword -w)"
+OUT="$(RULE0_GREP="$NOWORD" bash "$SWEEP" --config "$ROOT/sweep.config" --all "$ROOT/clean" 2>&1)"; RC=$?
+expect_rc 2 "a grep that ignores -w is refused"
+expect_has "-w matched inside a longer word" "names the exact broken property"
+expect_lacks "SWEEP CLEAN" "a broken grep never yields a clean verdict"
+
+# always case-insensitive: pass 2 would fire on ordinary prose.
+NOCASE="$(mk_shim grep-nocase ADD:-i)"
+OUT="$(RULE0_GREP="$NOCASE" bash "$SWEEP" --config "$ROOT/sweep.config" --all "$ROOT/clean" 2>&1)"; RC=$?
+expect_rc 2 "a grep that is always case-insensitive is refused"
+expect_has "case-insensitive by default" "names the exact broken property"
+
+# -x ignored: -Fxq would match a line PREFIX and silently drop files from the scan.
+cat >"$ROOT/grep-prefix" <<EOS
+#!/bin/sh
+A=""
+for x in "\$@"; do
+  [ "x\$x" = "x-Fxq" ] && { A="\$A -Fq"; continue; }
+  A="\$A \$x"
+done
+exec "$REALGREP" \$A
+EOS
+chmod +x "$ROOT/grep-prefix"
+OUT="$(RULE0_GREP="$ROOT/grep-prefix" bash "$SWEEP" --config "$ROOT/sweep.config" --all "$ROOT/clean" 2>&1)"; RC=$?
+expect_rc 2 "a grep whose -Fxq matches a prefix is refused"
+expect_has "matched a line PREFIX" "names the exact broken property"
+
+# a grep that does not exist at all must be an error, not a silent clean.
+OUT="$(RULE0_GREP="$ROOT/no-such-grep-binary" bash "$SWEEP" --config "$ROOT/sweep.config" --all "$ROOT/clean" 2>&1)"; RC=$?
+expect_rc 2 "a missing grep is an environment error"
+expect_has "grep not found" "says the grep could not be found"
+
+# ===========================================================================
+section "--ci: a run that covered nothing is a failure, not a pass"
+# ===========================================================================
+# repo3 is CLEAN and has several commits, so any failure below is attributable
+# to coverage alone and never to a planted secret.
+mkdir -p "$ROOT/repo3"
+(
+  cd "$ROOT/repo3" || exit 1
+  g init -q . >/dev/null 2>&1
+  for i in 1 2 3 4; do
+    printf 'ordinary line %s\nprintf and main are fine here\n' "$i" >"file$i.md"
+    g add -A >/dev/null 2>&1; g commit -q -m "commit $i" >/dev/null 2>&1
+  done
+) || { echo "git fixture setup failed" >&2; exit 1; }
+
+# --- hole 1: zero files scanned in --changed mode ---
+sweep --config "$ROOT/sweep.config" --changed --no-history "$ROOT/repo3"
+expect_rc 0 "unchanged tree: without --ci this is a warning"
+expect_has "would fail under --ci" "the warning names --ci as the fix"
+
+sweep --config "$ROOT/sweep.config" --changed --no-history --ci "$ROOT/repo3"
+expect_rc 1 "unchanged tree: --ci turns zero files scanned into a failure"
+expect_has "did not cover anything" "explains that the gate covered nothing"
+expect_lacks "SWEEP CLEAN" "--ci does not print a clean verdict on an empty run"
+
+# --- hole 2: history older than history-depth is never read ---
+sweep --config "$ROOT/sweep.config" --all --history-depth 1 "$ROOT/repo3"
+expect_rc 0 "shallow history: without --ci this is a warning"
+expect_has "COMMITS NOT SCANNED" "says out loud that older commits were skipped"
+expect_has "of 4 commits" "counts total commits, not just the scanned ones"
+
+sweep --config "$ROOT/sweep.config" --all --history-depth 1 --ci "$ROOT/repo3"
+expect_rc 1 "shallow history: --ci turns unread commits into a failure"
+expect_has "commits were never read" "names the uncovered commits"
+
+# --- the discriminating half: --ci must PASS a run that really did cover things ---
+sweep --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/repo3"
+expect_rc 0 "--ci passes when the run actually covered the tree and all history"
+expect_has "SWEEP CLEAN" "full coverage under --ci reaches the clean verdict"
+
+# --- and --ci must still FAIL on a real leak, not only on coverage holes ---
+sweep --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/dirty"
+expect_rc 1 "--ci still fails on planted secrets"
+expect_has "SWEEP FAILED" "a real finding is still reported as a finding"
+
+# ===========================================================================
 printf '\n=========================================\n'
 printf 'passed: %s   failed: %s\n' "$PASSED" "$FAILED"
 if [ "$FAILED" -ne 0 ]; then
