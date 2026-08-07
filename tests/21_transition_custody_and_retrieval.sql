@@ -17,9 +17,18 @@ INSERT INTO principals (id,kind,display_name,email) VALUES
 INSERT INTO principals (id,kind,display_name,agent_label) VALUES
  ('33333333-3333-3333-3333-333333333333','agent','A1','A1');
 
+-- Lands 'proposed' and reaches 'current' through the human gate. Since
+-- sql/25_propose_then_promote.sql, a direct INSERT at 'current' is rejected --
+-- this file previously did exactly that, and updating it is part of the fix
+-- rather than a workaround for it. The path under test starts from a genuinely
+-- promoted row, which is now the only kind there is.
 INSERT INTO memories (id,content,source_kind,provenance_basis,status,owner,visibility)
 VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','original fact','manual','human_direct',
-        'current','11111111-1111-1111-1111-111111111111','shared');
+        'proposed','11111111-1111-1111-1111-111111111111','shared');
+
+SELECT 'promote_precondition' AS test,
+  promote_memory('aaaaaaaa-0000-0000-0000-00000000000a',
+                 '11111111-1111-1111-1111-111111111111') = 'promoted' AS pass;
 
 -- actor custody, positive path
 SELECT 'supersede_returns_id' AS test,

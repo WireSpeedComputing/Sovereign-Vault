@@ -1,41 +1,42 @@
 -- tests/23_promotion_guards_negative.sql
--- ADOPT: upstream sovereign-memory-core#46 — review and promotion guard tests.
+-- ADOPT: upstream sovereign-memory-core #46 (promotion guards) and #47
+-- (promoted-record mutation audit). Covers sql/25_propose_then_promote.sql.
 --
 -- Run against a FRESH database (tests/replay_fresh_install.sh). Self-contained:
 -- creates its own principals, batch, and artifacts, and rolls back.
 --
--- ── READ THIS BEFORE INTERPRETING A RESULT ──────────────────────────────────
--- Every test here is a FAILING-NEGATIVE: `pass` is TRUE only when the forbidden
--- operation was REJECTED. `pass = false` means the path is OPEN.
+-- ── HOW TO READ A RESULT ────────────────────────────────────────────────────
+-- Sections A, B and C: `pass` must be TRUE. B and C are FAILING-NEGATIVES —
+-- TRUE means the forbidden operation was REJECTED, not that it succeeded.
 --
--- AS OF THIS COMMIT, SECTION B IS EXPECTED TO BE ALL-FALSE. That is not a
--- broken test file; it is the finding. Nine forbidden paths were probed against
--- a clean PG17 replay of sql/00-22 and all nine were open. The tests assert the
--- behaviour the upstream doctrine requires, so they stay red until the guard
--- lands, and they go green the moment it does. Do not "fix" them by weakening
--- the assertion to match current behaviour.
+-- Section A is a positive control over guards that predate this work. If A ever
+-- goes false, the harness is broken and B/C mean nothing. A negative-test file
+-- with no control is how a suite ends up proving only that it can run.
 --
--- SECTION A is a positive control. Those seven paths ARE guarded today and must
--- all be TRUE. If section A ever goes false, the harness itself is broken and
--- section B's results mean nothing. A negative-test file with no control is how
--- a suite ends up proving only that it can run.
+-- Section D is DOCUMENTED LIMITS. Those tests pass when the known bypass still
+-- works. That reads backwards on purpose: the limit is real, it is written into
+-- sql/13, sql/20 and sql/25, and encoding it here means it shows up in test
+-- output instead of living only in prose. If a D test starts FAILING, someone
+-- has changed the enforcement story and the documentation is now wrong — that
+-- is a docs bug, not a test bug.
+--
+-- ── HISTORY ─────────────────────────────────────────────────────────────────
+-- At commit 161b835 this file was all-red in Section B: nine forbidden paths
+-- probed, eight open. sql/25 closes them. The assertions were written against
+-- the doctrine BEFORE the fix existed and were not relaxed to fit it.
 --
 -- ── ON PRIVILEGE CONTEXT ────────────────────────────────────────────────────
--- These run as a superuser, which bypasses RLS. That is deliberate and it is a
--- faithful model of the deployment, not a cheat: `memories` and `wiki_pages`
--- have RLS enabled with ZERO policies and all privileges revoked from anon and
+-- These run as a superuser, which bypasses RLS. Deliberate, and a faithful model
+-- of the deployment rather than a cheat: `memories` and `wiki_pages` have RLS
+-- enabled with ZERO policies and all privileges revoked from anon and
 -- authenticated, so every write in production necessarily arrives via
 -- service_role (which carries BYPASSRLS) or a SECURITY DEFINER function. RLS is
--- therefore not load-bearing for these paths. Triggers are the only enforcement
--- layer that actually executes, and triggers fire for superusers too.
+-- not load-bearing for these paths. Triggers are the only enforcement layer that
+-- actually executes, and triggers fire for superusers too.
 
 BEGIN;
 
 CREATE TEMP TABLE t(section text, test text, pass boolean, detail text) ON COMMIT DROP;
-
--- helper: record whether a statement raised. pass = it raised (rejection held).
--- Each attempt runs in its own subtransaction so a failure does not poison the
--- rest of the file.
 
 INSERT INTO principals (id,kind,display_name,email) VALUES
  ('11111111-1111-1111-1111-111111111111','human','H1','h1@example.com');
@@ -58,19 +59,22 @@ VALUES ('a0000000-0000-0000-0000-000000000005','bbbbbbbb-0000-0000-0000-00000000
 
 
 -- ══════════════════════════════════════════════════════════════════════════
--- SECTION A — POSITIVE CONTROL. All must be TRUE.
--- These prove the harness can distinguish a closed path from an open one.
+-- SECTION A — POSITIVE CONTROL over pre-existing guards. All must be TRUE.
+-- Every insert here lands at 'proposed'. That is not incidental: after sql/25,
+-- inserting at 'current' is rejected by the status sanction, so a control that
+-- inserted at 'current' would go green on the wrong guard and stop proving the
+-- thing it names.
 -- ══════════════════════════════════════════════════════════════════════════
 
 DO $c$ BEGIN
   INSERT INTO memories (content, source_kind, status, owner, visibility)
-  VALUES ('no basis','manual','current','11111111-1111-1111-1111-111111111111','shared');
+  VALUES ('no basis','manual','proposed','11111111-1111-1111-1111-111111111111','shared');
   INSERT INTO t VALUES ('A','ctl_null_provenance_basis_rejected',false,'accepted');
 EXCEPTION WHEN others THEN INSERT INTO t VALUES ('A','ctl_null_provenance_basis_rejected',true,SQLERRM); END $c$;
 
 DO $c$ BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
-  VALUES ('no citation','manual','source_document','current','11111111-1111-1111-1111-111111111111','shared');
+  VALUES ('no citation','manual','source_document','proposed','11111111-1111-1111-1111-111111111111','shared');
   INSERT INTO t VALUES ('A','ctl_missing_citation_rejected',false,'accepted');
 EXCEPTION WHEN others THEN INSERT INTO t VALUES ('A','ctl_missing_citation_rejected',true,SQLERRM); END $c$;
 
@@ -96,32 +100,40 @@ DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO t VALUES ('A','ctl_agent_principal_cannot_promote',false,'accepted');
 EXCEPTION WHEN others THEN INSERT INTO t VALUES ('A','ctl_agent_principal_cannot_promote',true,SQLERRM); END $c$;
 
+-- double promotion: reaches 'current' only through the sanctioned path, which
+-- is now the only way a current row can exist at all.
 DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
-  VALUES ('already current','manual','human_direct','current','11111111-1111-1111-1111-111111111111','shared')
+  VALUES ('already current','manual','human_direct','proposed','11111111-1111-1111-1111-111111111111','shared')
   RETURNING id INTO v;
   PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
-  INSERT INTO t VALUES ('A','ctl_cannot_promote_current_row',false,'accepted');
-EXCEPTION WHEN others THEN INSERT INTO t VALUES ('A','ctl_cannot_promote_current_row',true,SQLERRM); END $c$;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  INSERT INTO t VALUES ('A','ctl_cannot_promote_twice',false,'accepted');
+EXCEPTION WHEN others THEN INSERT INTO t VALUES ('A','ctl_cannot_promote_twice',true,SQLERRM); END $c$;
 
+-- An artifact id that does not exist is rejected. Post-sql/25 the classification
+-- allowlist catches this before the FK does (an unknown id has no action, and
+-- the allowlist requires action='import'), so this control no longer isolates
+-- FK integrity -- it is named for what it now proves, not what it used to.
 DO $c$ BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, citation, status,
                         source_artifact_id, owner, visibility)
   VALUES ('ghost artifact','imported_artifact','imported_artifact','x','proposed',
           'dddddddd-dddd-dddd-dddd-dddddddddddd','11111111-1111-1111-1111-111111111111','shared');
-  INSERT INTO t VALUES ('A','ctl_dangling_artifact_fk_rejected',false,'accepted');
-EXCEPTION WHEN others THEN INSERT INTO t VALUES ('A','ctl_dangling_artifact_fk_rejected',true,SQLERRM); END $c$;
+  INSERT INTO t VALUES ('A','ctl_unknown_artifact_rejected',false,'accepted');
+EXCEPTION WHEN others THEN INSERT INTO t VALUES ('A','ctl_unknown_artifact_rejected',true,SQLERRM); END $c$;
 
 
 -- ══════════════════════════════════════════════════════════════════════════
--- SECTION B — THE #46 FORBIDDEN PATHS. All must be TRUE once the guard lands.
--- Currently all FALSE. See header.
+-- SECTION B — THE #46 FORBIDDEN PATHS. All must be TRUE.
 -- ══════════════════════════════════════════════════════════════════════════
 
--- B1/B2/B3 + B4: a non-promotable artifact must not become authoritative memory.
--- The attempt is the realistic one: normalize to 'proposed' with correct
--- provenance, then promote through the sanctioned human gate. promote_memory()
--- never inspects the source artifact, so the classification is not consulted.
+-- B1-B4: a non-promotable artifact must not become authoritative memory. The
+-- attempt is the realistic one: normalize to 'proposed' with correct provenance,
+-- then promote through the sanctioned human gate.
+-- B4 is the case upstream #46 does not name: action IS NULL. It is the DEFAULT
+-- state of every landed artifact, which is why the guard is an allowlist on
+-- action='import' and not a denylist on hold/exclude/evidence.
 DO $c$
 DECLARE r record; v_id uuid;
 BEGIN
@@ -148,8 +160,6 @@ BEGIN
 END $c$;
 
 -- B5: a structurally valid import package must not, by itself, confer authority.
--- Nothing gates INSERT-time status for non-agent source kinds, so the human
--- gate is optional rather than mandatory.
 DO $c$ BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, citation, status,
                         source_artifact_id, owner, visibility)
@@ -161,7 +171,9 @@ DO $c$ BEGIN
 EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('B','b5_import_package_cannot_self_confer_authority',true,SQLERRM); END $c$;
 
--- B6: same hole via source_kind='ingest', with no artifact at all.
+-- B6: same hole via source_kind='ingest', with no artifact at all. This is the
+-- test that proves the guard is not keyed on source_kind -- a caller-declared
+-- field would be bypassable by simply declaring something else.
 DO $c$ BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, citation, status, owner, visibility)
   VALUES ('ingest asserts itself authoritative','ingest','source_document','doc:x','current',
@@ -171,10 +183,20 @@ DO $c$ BEGIN
 EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('B','b6_ingest_cannot_self_confer_authority',true,SQLERRM); END $c$;
 
--- B7: agent-authored content must not reach 'current' without explicit human
--- review. The schema permits it when the agent declares
--- provenance_basis='decision_record' -- but nothing verifies that a decision
--- record exists. The citation below says so in as many words and still lands.
+-- B6b: and via source_kind='manual', the declaration a bypasser would actually use.
+DO $c$ BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('manual assertion of authority','manual','human_direct','current',
+          '11111111-1111-1111-1111-111111111111','shared');
+  INSERT INTO t VALUES ('B','b6b_manual_cannot_self_confer_authority',false,
+    'inserted directly at current with no human gate');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('B','b6b_manual_cannot_self_confer_authority',true,SQLERRM); END $c$;
+
+-- B7: agent-authored content must not reach 'current' without explicit review.
+-- Pre-sql/25 the schema permitted this whenever the agent declared
+-- provenance_basis='decision_record', with nothing verifying such a record
+-- existed. The citation below says so in as many words.
 DO $c$ BEGIN
   INSERT INTO memories (content, source_kind, source_agent, provenance_basis, citation,
                         status, owner, visibility)
@@ -186,9 +208,184 @@ DO $c$ BEGIN
 EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('B','b7_agent_cannot_self_certify_decision_record',true,SQLERRM); END $c$;
 
--- B8: the sanctioned-transition guard is a transaction GUC any caller can set.
--- Already recorded as an honest limit in sql/13; asserted here so it is visible
--- in the suite rather than only in a comment.
+-- B8: the approved import path must REMAIN possible (#46 acceptance criterion).
+-- A guard that closes B1-B7 by also closing this has broken the system rather
+-- than secured it.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, citation, status,
+                        source_artifact_id, owner, visibility)
+  VALUES ('legitimately imported fact','imported_artifact','imported_artifact',
+          'raw_artifacts:impt-1','proposed','a0000000-0000-0000-0000-000000000004',
+          '11111111-1111-1111-1111-111111111111','shared')
+  RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  INSERT INTO t VALUES ('B','b8_approved_import_path_still_works',
+    (SELECT status='current' FROM memories WHERE id=v),'promoted via human gate');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('B','b8_approved_import_path_still_works',false,SQLERRM); END $c$;
+
+-- B9: supersession must REMAIN possible. This is the regression test for the
+-- bug the Part 1 trigger exposed: supersede_memory's successor row is inserted
+-- at status='current', so if the GUC span does not cover that INSERT, the new
+-- guard blocks legitimate supersession. Verified failing before the span was
+-- widened.
+DO $c$ DECLARE v uuid; v_new uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('fact to be corrected','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  v_new := supersede_memory(v,'corrected fact','decision_record','cite',
+                            '11111111-1111-1111-1111-111111111111','regression');
+  INSERT INTO t VALUES ('B','b9_supersession_still_works',
+    (SELECT status='current' FROM memories WHERE id=v_new)
+    AND (SELECT status='superseded' FROM memories WHERE id=v),
+    'successor current, predecessor superseded');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('B','b9_supersession_still_works',false,SQLERRM); END $c$;
+
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- SECTION C — #47 PROMOTED-RECORD MUTATION AUDIT. All must be TRUE.
+-- ══════════════════════════════════════════════════════════════════════════
+
+-- C1: a silent post-promotion content edit must be refused.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('promoted truth','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  UPDATE memories SET content='silently rewritten after promotion' WHERE id=v;
+  INSERT INTO t VALUES ('C','c1_promoted_content_edit_rejected',false,
+    'content of a current row rewritten in place');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c1_promoted_content_edit_rejected',true,SQLERRM); END $c$;
+
+-- C2: swapping the citation is the same class of tamper as rewriting the prose.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, citation, status, owner, visibility)
+  VALUES ('sourced claim','imported_artifact','source_document','contract A, p3','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  UPDATE memories SET citation='contract B, p9' WHERE id=v;
+  INSERT INTO t VALUES ('C','c2_promoted_citation_swap_rejected',false,'citation swapped in place');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c2_promoted_citation_swap_rejected',true,SQLERRM); END $c$;
+
+-- C3: editing a PROPOSED candidate must remain unrestricted. This is the
+-- distinction the docs previously did not draw: a candidate is work in progress,
+-- a promoted record is a published claim.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('draft claim','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  UPDATE memories SET content='revised draft claim' WHERE id=v;
+  INSERT INTO t VALUES ('C','c3_proposed_candidate_stays_editable',
+    (SELECT content='revised draft claim' FROM memories WHERE id=v),'candidate edited');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c3_proposed_candidate_stays_editable',false,SQLERRM); END $c$;
+
+-- C4: operational fields on a promoted row must stay mutable. Marking a
+-- deadline done is not a rewrite of what was promoted.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility,
+                        due_date, due_status)
+  VALUES ('deliverable due','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared', now()+interval '2 days','pending')
+  RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  UPDATE memories SET due_status='done' WHERE id=v;
+  INSERT INTO t VALUES ('C','c4_operational_fields_stay_mutable',
+    (SELECT due_status='done' FROM memories WHERE id=v),'due_status updated on a current row');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c4_operational_fields_stay_mutable',false,SQLERRM); END $c$;
+
+-- C5: promotion writes a receipt.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('receipted fact','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  INSERT INTO t VALUES ('C','c5_promotion_writes_audit_receipt',
+    (SELECT count(*)=1 FROM promoted_record_audit
+      WHERE record_id=v AND event='promoted'
+        AND actor='11111111-1111-1111-1111-111111111111'),'receipt present with actor');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c5_promotion_writes_audit_receipt',false,SQLERRM); END $c$;
+
+-- C6: an untampered promoted row verifies as 'match'.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('verifiable fact','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  INSERT INTO t VALUES ('C','c6_untampered_row_verifies_match',
+    (SELECT state='match' FROM verify_promoted_integrity() WHERE record_id=v),'state=match');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c6_untampered_row_verifies_match',false,SQLERRM); END $c$;
+
+-- C7: THE DETECTION TEST. The guard in C1 is prevention; this proves the audit
+-- catches an edit that got PAST prevention. The trigger is disabled to simulate
+-- exactly the bypass the docs admit is possible -- a superuser, or a caller who
+-- armed the GUC. If this ever goes false, tampering is undetectable and the
+-- whole #47 answer is hollow.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('tamper target','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  ALTER TABLE memories DISABLE TRIGGER trg_promoted_record_immutable_memories;
+  UPDATE memories SET content='tampered behind the guard' WHERE id=v;
+  ALTER TABLE memories ENABLE TRIGGER trg_promoted_record_immutable_memories;
+  INSERT INTO t VALUES ('C','c7_bypassed_edit_is_detected',
+    (SELECT state='mismatch' FROM verify_promoted_integrity() WHERE record_id=v),
+    'verify_promoted_integrity reports mismatch');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c7_bypassed_edit_is_detected',false,SQLERRM); END $c$;
+
+-- C8: the receipt table is append-only. An audit trail that can be edited is not one.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('audit immutability','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  UPDATE promoted_record_audit SET content_sha256='forged' WHERE record_id=v;
+  INSERT INTO t VALUES ('C','c8_audit_table_is_append_only',false,'receipt was updated');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c8_audit_table_is_append_only',true,SQLERRM); END $c$;
+
+-- C9: a current row with no receipt reports 'unaudited', not 'match'. Silence
+-- about a row must never read as a clean bill of health -- every row promoted
+-- BEFORE sql/25 is in exactly this state.
+--
+-- The unaudited row is produced by arming the GUC and inserting at 'current'
+-- directly, which is precisely how a pre-migration row looks: authoritative,
+-- no receipt. The first draft of this test deleted the receipt instead, and the
+-- append-only guard (C8) correctly refused -- the test was wrong, not the guard.
+DO $c$ DECLARE v uuid; BEGIN
+  PERFORM set_config('app.promoting','on',true);
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('legacy promoted row','manual','human_direct','current',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM set_config('app.promoting','off',true);
+  INSERT INTO t VALUES ('C','c9_unaudited_row_reports_unaudited',
+    (SELECT state='unaudited' FROM verify_promoted_integrity() WHERE record_id=v),
+    'state=unaudited');
+EXCEPTION WHEN others THEN
+  PERFORM set_config('app.promoting','off',true);
+  INSERT INTO t VALUES ('C','c9_unaudited_row_reports_unaudited',false,SQLERRM); END $c$;
+
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- SECTION D — DOCUMENTED LIMITS. TRUE means the known bypass still works.
+-- Read the header before concluding anything from these.
+-- ══════════════════════════════════════════════════════════════════════════
+
+-- D1: app.promoting is a session GUC. Any caller holding service_role can arm it
+-- and walk through every guard in sql/25. This closes the ACCIDENTAL path, not
+-- the deliberate one. Recorded in sql/13, sql/20 and sql/25; asserted here so it
+-- is visible in test output rather than only in prose.
+-- Closing it for real requires per-principal connection identity (vault_auth),
+-- not another trigger.
 DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO memories (content, source_kind, source_agent, provenance_basis, citation,
                         status, owner, visibility)
@@ -198,40 +395,48 @@ DO $c$ DECLARE v uuid; BEGIN
   PERFORM set_config('app.promoting','on',true);
   UPDATE memories SET status='current' WHERE id=v;
   PERFORM set_config('app.promoting','off',true);
-  INSERT INTO t VALUES ('B','b8_caller_cannot_self_arm_promotion_guard',false,
-    'bare UPDATE reached current by setting app.promoting directly');
+  INSERT INTO t VALUES ('D','limit_caller_can_self_arm_promotion_guard',
+    (SELECT status='current' FROM memories WHERE id=v),
+    'KNOWN LIMIT: bare UPDATE reached current by setting app.promoting directly');
 EXCEPTION WHEN others THEN
   PERFORM set_config('app.promoting','off',true);
-  INSERT INTO t VALUES ('B','b8_caller_cannot_self_arm_promotion_guard',true,SQLERRM); END $c$;
+  INSERT INTO t VALUES ('D','limit_caller_can_self_arm_promotion_guard',false,
+    'enforcement changed -- sql/13, sql/20, sql/25 and STATUS.md now overstate the limit: '||SQLERRM); END $c$;
 
--- B9: the approved import path must REMAIN possible (#46 acceptance criterion).
--- This one is TRUE today and must stay TRUE after any fix. A guard that closes
--- B1-B8 by also closing this has broken the system rather than secured it.
-DO $c$ DECLARE v uuid; BEGIN
-  INSERT INTO memories (content, source_kind, provenance_basis, citation, status,
-                        source_artifact_id, owner, visibility)
-  VALUES ('legitimately imported fact','imported_artifact','imported_artifact',
-          'raw_artifacts:impt-1','proposed','a0000000-0000-0000-0000-000000000004',
-          '11111111-1111-1111-1111-111111111111','shared')
-  RETURNING id INTO v;
-  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
-  INSERT INTO t VALUES ('B','b9_approved_import_path_still_works',
-    (SELECT status='current' FROM memories WHERE id=v),'promoted via human gate');
+-- D2: the same GUC also opens the INSERT path added by sql/25. Stated separately
+-- because a reader could reasonably assume the new BEFORE INSERT guard is
+-- stronger than the older BEFORE UPDATE one. It is not; it is the same GUC.
+DO $c$ BEGIN
+  PERFORM set_config('app.promoting','on',true);
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('self-armed direct insert','manual','human_direct','current',
+          '11111111-1111-1111-1111-111111111111','shared');
+  PERFORM set_config('app.promoting','off',true);
+  INSERT INTO t VALUES ('D','limit_self_armed_guc_permits_direct_insert',true,
+    'KNOWN LIMIT: direct INSERT at current succeeds while the GUC is armed');
 EXCEPTION WHEN others THEN
-  INSERT INTO t VALUES ('B','b9_approved_import_path_still_works',false,SQLERRM); END $c$;
+  PERFORM set_config('app.promoting','off',true);
+  INSERT INTO t VALUES ('D','limit_self_armed_guc_permits_direct_insert',false,
+    'enforcement changed -- docs now overstate the limit: '||SQLERRM); END $c$;
 
 
 -- ── Results ────────────────────────────────────────────────────────────────
-SELECT section, test, pass, left(detail,80) AS detail FROM t ORDER BY section, test;
+SELECT section, test, pass, left(detail,72) AS detail FROM t ORDER BY section, test;
 
-SELECT 'SECTION_A_control_all_pass' AS summary,
-       bool_and(pass) AS pass,
-       count(*) FILTER (WHERE NOT pass)::text || ' control failures' AS detail
-FROM t WHERE section='A';
-
-SELECT 'SECTION_B_forbidden_paths_all_closed' AS summary,
-       bool_and(pass) AS pass,
-       count(*) FILTER (WHERE NOT pass)::text || ' of ' || count(*)::text || ' still OPEN' AS detail
-FROM t WHERE section='B';
+SELECT 'A_controls'  AS summary, bool_and(pass) AS pass,
+       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' failed' AS detail
+FROM t WHERE section='A'
+UNION ALL
+SELECT 'B_46_forbidden_paths_closed', bool_and(pass),
+       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' still OPEN'
+FROM t WHERE section='B'
+UNION ALL
+SELECT 'C_47_mutation_audit', bool_and(pass),
+       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' failed'
+FROM t WHERE section='C'
+UNION ALL
+SELECT 'D_documented_limits_still_present', bool_and(pass),
+       count(*) FILTER (WHERE NOT pass)::text||' of '||count(*)::text||' changed -- update the docs'
+FROM t WHERE section='D';
 
 ROLLBACK;

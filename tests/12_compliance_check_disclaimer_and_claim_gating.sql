@@ -1,3 +1,5 @@
+-- REQUIRES-DEPLOYMENT: needs the seeded compliance rule rows (banned_phrase +
+-- required_phrase, status='current'); a fresh replay has an empty rules table.
 -- compliance_check() regression tests: disclaimer false-positive (blocker fix) and
 -- missing_disclaimer over-firing on claim-free text. Run against a live deployment
 -- with the standard disease-claim rule (a rule_type='banned_phrase' row whose pattern

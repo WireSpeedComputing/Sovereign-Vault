@@ -1,4 +1,5 @@
 -- Owner/visibility isolation test.
+-- REQUIRES-DEPLOYMENT: needs real principal ids substituted for :'principal_N'.
 -- Written per-principal, run inside a transaction that is always rolled back -- no
 -- fixture data is left behind. Assert that each principal's owner-scoped boot surfaces
 -- (memory_hot_ranked_for, deadlines_upcoming_for) return their own private rows plus all
@@ -9,6 +10,19 @@
 -- principal ids for the three placeholders below when running against a live database.
 
 BEGIN;
+
+-- FIXTURE SETUP, not an authority claim. Since sql/25_propose_then_promote.sql
+-- a direct INSERT at status='current' is rejected; this file needs current rows
+-- to exist so the owner/visibility surfaces have something to filter, and it is
+-- testing isolation, not promotion. Arming the documented transaction guard for
+-- the fixture inserts keeps the test focused on what it actually covers. Going
+-- through promote_memory() here would additionally require every :principal_N
+-- to be an active HUMAN principal, which this test does not otherwise assume.
+--
+-- That this is possible at all is the documented limit recorded in sql/25 and
+-- asserted in tests/23 section D. Fixture convenience here is the same hole a
+-- bypasser would use; it is not evidence the guard works.
+SET LOCAL app.promoting = 'on';
 
 INSERT INTO memories (id, content, source_kind, provenance_basis, status, owner, visibility)
 VALUES
@@ -32,6 +46,8 @@ VALUES
   ('bbbbbbbb-0000-0000-0000-00000000b002', 'principal-2-private deadline', 'manual', 'human_direct', 'current', :'principal_2', 'private', now() + interval '2 days', 'pending'),
   ('bbbbbbbb-0000-0000-0000-00000000b003', 'principal-3-private deadline', 'manual', 'human_direct', 'current', :'principal_3', 'private', now() + interval '2 days', 'pending'),
   ('bbbbbbbb-0000-0000-0000-00000000b004', 'shared deadline visible to all', 'manual', 'human_direct', 'current', :'principal_1', 'shared', now() + interval '2 days', 'pending');
+
+SET LOCAL app.promoting = 'off';
 
 DO $$
 DECLARE
