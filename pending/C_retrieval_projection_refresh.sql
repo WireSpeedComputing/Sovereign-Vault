@@ -27,7 +27,7 @@
 -- unit keeps visibility='shared', and retrieve_context() filters on the UNIT's
 -- copy of that column, not the source row's.
 --
--- VERIFIED on a clean PG17 replay of sql/00-25, using only sql/21's own
+-- VERIFIED on a clean PG17 replay of sql/00-26, using only sql/21's own
 -- documented maintenance path:
 --
 --   shared, after refresh          -> H2 matches the row        (expected)
@@ -40,11 +40,18 @@
 -- invalidation rule. There is currently NO operation that closes this except
 -- editing the memory's text.
 --
--- This is live on the deployment now and is independent of this file. It also
--- interacts badly with sql/25: now that a promoted record's content is
+-- LATENT, NOT ACTIVE, on the deployment. Owner-verified 2026-08-07: zero ACL
+-- drift across all 129 production units, because no memory's visibility or
+-- owner has ever been changed after projection. The defect is real and the
+-- mechanism is confirmed; it has simply never been triggered. It goes live the
+-- first time anyone marks something private -- which is exactly what founder
+-- onboarding does. Latency is a deadline, not a mitigation.
+--
+-- It also interacts badly with sql/26: now that a promoted record's content is
 -- immutable, the one accident that used to clear a stale unit -- someone
--- editing the text -- can no longer happen, so the leak is permanent for the
--- affected row rather than eventually self-healing.
+-- editing the text -- can no longer happen. Two individually-correct changes
+-- combine to make the leak permanent for an affected row rather than
+-- eventually self-healing.
 --
 -- This file fixes it for rows that change AFTER it is applied, by syncing the
 -- metadata columns explicitly. It does NOT retroactively correct units that are

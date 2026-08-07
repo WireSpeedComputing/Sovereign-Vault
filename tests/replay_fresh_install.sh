@@ -73,7 +73,7 @@ echo "  tables missing RLS (want none): $NORLS"
 echo "  repo-owned functions:"
 psql -d "$DB" -t -A -c "select string_agg(p.proname,',' order by p.proname) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and not exists (select 1 from pg_depend d where d.objid=p.oid and d.deptype='e');" | tr ',' '\n' | sed 's/^/    /'
 
-echo "  tables with rows after replay (expect only schema_changelog and provenance_registry):"
+echo "  tables with rows after replay (expect only schema_changelog, provenance_registry, perimeter_exception):"
 psql -d "$DB" -t -A -c "select coalesce(string_agg(relname||'='||n_live_tup,', '),'(all empty)') from pg_stat_user_tables where n_live_tup>0;" | sed 's/^/    /'
 
 if [ "$PERIM" != "0" ] || [ "$NORLS" != "(none)" ]; then

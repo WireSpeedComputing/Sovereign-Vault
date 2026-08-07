@@ -46,7 +46,7 @@ records the acting principal, and writes an audit receipt for both rows.
 reach `current` only through `promote_memory()` (which requires an active human
 principal) or as the successor row inside `supersede_memory()`.
 
-Before `sql/25_propose_then_promote.sql` this was not true: `promote_memory()`
+Before `sql/26_propose_then_promote.sql` this was not true: `promote_memory()`
 was a convenience wrapper rather than a chokepoint, and any caller could insert
 an authoritative row directly. See `tests/23_promotion_guards_negative.sql`.
 
@@ -91,6 +91,6 @@ refuses `UPDATE` and `DELETE`). `verify_promoted_integrity()` compares every
   means something bypassed it
 - `unaudited` — no receipt exists, so nothing can be said about this row
 
-`unaudited` is the honest answer for every row promoted before `sql/25` was
+`unaudited` is the honest answer for every row promoted before `sql/26` was
 applied. It is reported as its own state rather than folded into `match`,
 because silence about a row must never read as a clean bill of health.

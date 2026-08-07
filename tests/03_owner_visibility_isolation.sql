@@ -11,7 +11,7 @@
 
 BEGIN;
 
--- FIXTURE SETUP, not an authority claim. Since sql/25_propose_then_promote.sql
+-- FIXTURE SETUP, not an authority claim. Since sql/26_propose_then_promote.sql
 -- a direct INSERT at status='current' is rejected; this file needs current rows
 -- to exist so the owner/visibility surfaces have something to filter, and it is
 -- testing isolation, not promotion. Arming the documented transaction guard for
@@ -19,7 +19,7 @@ BEGIN;
 -- through promote_memory() here would additionally require every :principal_N
 -- to be an active HUMAN principal, which this test does not otherwise assume.
 --
--- That this is possible at all is the documented limit recorded in sql/25 and
+-- That this is possible at all is the documented limit recorded in sql/26 and
 -- asserted in tests/23 section D. Fixture convenience here is the same hole a
 -- bypasser would use; it is not evidence the guard works.
 SET LOCAL app.promoting = 'on';

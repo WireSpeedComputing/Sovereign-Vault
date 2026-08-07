@@ -10,7 +10,90 @@ executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
 
-## Retrieval projection: no auto-refresh, and a live visibility leak (2026-08-07)
+## perimeter_assert was crying wolf on the deployment — FIXED, NOT YET APPLIED (2026-08-07)
+
+`sql/28_perimeter_assert_signal.sql`. Found while reconciling migration 38.
+
+Run against the deployment, `perimeter_assert()` returned close to **two hundred
+rows**. All but one were pgvector extension internals — `vector_add`,
+`halfvec_cmp`, `l2_distance`, `sparsevec_out` and their kin — granted EXECUTE to
+`anon` and `authenticated`. Supabase applies those grants when the extension is
+installed. They are not a decision this schema made, not a perimeter it
+controls, and revoking them would break the vector type for every legitimate
+caller.
+
+A local replay showed **zero** of these, because vanilla PostgreSQL does not
+apply those default grants. So the check passed locally and was unusable in the
+one environment it exists to protect — and the noise is why nobody noticed.
+
+This repo already learned this exact lesson in `rule0-sweep.sh`, where a
+case-insensitive pattern list matched shell builtins and the fix was to split
+the patterns rather than keep a checker nobody could act on. "A checker that
+cries wolf gets ignored." Same failure, different tool.
+
+Fixed by excluding extension-owned objects (`pg_depend deptype='e'` — the same
+line `replay_fresh_install.sh` already draws for "repo-owned functions") and by
+moving deliberate exposures into a declared `perimeter_exception` table with a
+reason, rather than hardcoding them into the function body where they become
+indistinguishable from bugs. `perimeter_exceptions_review()` reports whether
+each declared exception is still present, so a stale one can be removed instead
+of silently pre-authorising a future re-grant.
+
+One exception is seeded: `public.request_has_capability` to `authenticated`,
+which is the deliberate API entry point from migration 38.
+
+`perimeter_assert()`'s return signature is deliberately UNCHANGED — `sql/27`
+already changes one public signature in this batch, and each such change
+invalidates operating instructions elsewhere (upstream #70).
+
+## Public request_has_capability wrapper — APPLIED (2026-08-07)
+
+`sql/25_public_request_has_capability.sql`, deployment migration 38.
+Transcribed from the applied definition read back with `pg_get_functiondef()`,
+not retyped from a description.
+
+Grants and PostgREST reachability are independent: `sql/23` grants EXECUTE on
+`vault_auth.request_has_capability` to `authenticated`, but PostgREST only
+exposes configured Data API schemas and `vault_auth` is deliberately not one.
+The inner function was granted and unreachable at once. This wrapper is the
+reachable entry point.
+
+**`SECURITY INVOKER` is load-bearing here, not an oversight.** It adds no
+privilege (the caller already holds USAGE and EXECUTE on the inner function),
+and it preserves `session_user`, which `vault_auth._trusted_request_claims()`
+uses to distinguish a genuine PostgREST request from an administrative session
+that fabricated `request.jwt.claims`. A definer wrapper would rewrite
+`current_user` and invert the property the function exists to protect. The file
+says so in a comment, because "harden this by making it DEFINER" is exactly the
+change a future reader would think is an improvement.
+
+## Retrieval ACL drift — FIXED, NOT YET APPLIED (2026-08-07)
+
+`sql/27_retrieval_acl_drift_fix.sql` plus `tests/27_retrieval_acl_drift.sql`
+(11 assertions, all passing on a fresh replay).
+
+The invalidation predicate in `refresh_retrieval_units()` now compares `owner`,
+`visibility` and `workstream` alongside status and content hash, so a full
+rescan REPAIRS access-control drift instead of preserving it. This is the repair
+path for units that were already stale; the incremental triggers in `pending/C`
+maintain correctness going forward but cannot correct history.
+
+`retrieval_acl_drift()` is a new read-only detection surface, so drift can be
+observed without running the repair.
+
+**⚠ PUBLIC SIGNATURE CHANGE.** `refresh_retrieval_units()` returned
+`(invalidated, projected_memories, projected_wiki)` and now returns
+`(invalidated, repaired_acl_drift, projected_memories, projected_wiki)`.
+`CREATE OR REPLACE` cannot widen a return type, so the old function is DROPPED.
+Any runbook or client destructuring the 3-column shape is stale as of this
+migration. This is the **second** live instance of the failure upstream #70
+describes — the first was `supersede_memory()` losing its 5-argument form in
+`sql/20` — and it is recorded here rather than slipped through. Folding the
+count into `invalidated` to preserve the shape was rejected: a repair
+indistinguishable from a no-op cannot answer "was anything actually leaking?",
+which is the only question the change exists to answer.
+
+## Retrieval projection: no auto-refresh, and a latent ACL-drift leak (2026-08-07)
 
 Two separate problems in the retrieval projection. `pending/C_retrieval_projection_refresh.sql`
 addresses both for future writes; NOT APPLIED.
@@ -34,16 +117,21 @@ carry a WHEN clause so embedding backfill, `hot_touch` and `due_status` writes
 do not re-project. 13 tests in `pending/C_..._TEST.sql`, all passing on a fresh
 replay with C applied.
 
-### 2. LIVE DEFECT — a memory made private stays readable through retrieval
+### 2. ACL DRIFT — a memory made private stays readable through retrieval
 
-**This one needs an owner decision; it is on the deployment now.**
+**Latent on the deployment, not active.** Owner-verified 2026-08-07: zero ACL
+drift across all 129 production units, because no memory's visibility or owner
+has ever been changed after projection. The mechanism is confirmed; it has
+simply never been triggered. It goes live the first time anyone marks something
+private — which is what founder onboarding does. Latency is a deadline, not a
+mitigation.
 
 `refresh_retrieval_units()` invalidates a unit only when its source stops being
 `current` or its CONTENT HASH drifts. It never compares `owner`, `visibility` or
 `workstream`. `retrieve_context()` filters on the UNIT's copy of `visibility`,
 not the source row's.
 
-Verified on a clean PG17 replay of `sql/00-25` using only the documented
+Verified on a clean PG17 replay of `sql/00-26` using only the documented
 maintenance path:
 
 | step | result |
@@ -57,9 +145,10 @@ The full rescan does not repair it, because the rescan has the same hash-only
 invalidation rule. **No operation currently closes this except editing the
 memory's text.**
 
-It interacts badly with `sql/25`: now that a promoted record's content is
+It interacts badly with `sql/26`: now that a promoted record's content is
 immutable, the one accident that used to clear a stale unit — someone editing
-the text — cannot happen anymore, so the leak becomes permanent for the affected
+the text — cannot happen anymore. Two individually-correct changes combine into
+a worse outcome than either alone: the leak becomes permanent for an affected
 row instead of eventually self-healing.
 
 `pending/C` fixes it for rows changed after it is applied. It does NOT
@@ -71,7 +160,7 @@ is done.
 
 ## Propose-then-promote + promoted-record audit — BUILT, NOT YET APPLIED (2026-08-07)
 
-`sql/25_propose_then_promote.sql`. Upstream #46 (ADOPT) and #47 (ADOPT).
+`sql/26_propose_then_promote.sql`. Upstream #46 (ADOPT) and #47 (ADOPT).
 **This file is in `sql/` but the deployment does not have it.** It replays and
 its tests pass; it has not been applied to any hosted project.
 
@@ -151,7 +240,7 @@ Documentation: `docs/04-record-lifecycle.md`.
 
 ## Wiki supersession — APPLIED (2026-08-07)
 
-`sql/23_wiki_supersession.sql`, deployment migration 37. Upstream #71 closed on
+`sql/24_wiki_supersession.sql`, deployment migration 37. Upstream #71 closed on
 this deployment. Staged as `pending/A_wiki_supersession_ISSUE71.sql` until
 approval, then moved into `sql/` — `pending/` exists precisely so an unapproved
 migration is not swept into a replay that would then prove something untrue.

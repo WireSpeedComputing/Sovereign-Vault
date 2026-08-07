@@ -1,6 +1,6 @@
 -- tests/23_promotion_guards_negative.sql
 -- ADOPT: upstream sovereign-memory-core #46 (promotion guards) and #47
--- (promoted-record mutation audit). Covers sql/25_propose_then_promote.sql.
+-- (promoted-record mutation audit). Covers sql/26_propose_then_promote.sql.
 --
 -- Run against a FRESH database (tests/replay_fresh_install.sh). Self-contained:
 -- creates its own principals, batch, and artifacts, and rolls back.
@@ -15,14 +15,14 @@
 --
 -- Section D is DOCUMENTED LIMITS. Those tests pass when the known bypass still
 -- works. That reads backwards on purpose: the limit is real, it is written into
--- sql/13, sql/20 and sql/25, and encoding it here means it shows up in test
+-- sql/13, sql/20 and sql/26, and encoding it here means it shows up in test
 -- output instead of living only in prose. If a D test starts FAILING, someone
 -- has changed the enforcement story and the documentation is now wrong — that
 -- is a docs bug, not a test bug.
 --
 -- ── HISTORY ─────────────────────────────────────────────────────────────────
 -- At commit 161b835 this file was all-red in Section B: nine forbidden paths
--- probed, eight open. sql/25 closes them. The assertions were written against
+-- probed, eight open. sql/26 closes them. The assertions were written against
 -- the doctrine BEFORE the fix existed and were not relaxed to fit it.
 --
 -- ── ON PRIVILEGE CONTEXT ────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ VALUES ('a0000000-0000-0000-0000-000000000005','bbbbbbbb-0000-0000-0000-00000000
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- SECTION A — POSITIVE CONTROL over pre-existing guards. All must be TRUE.
--- Every insert here lands at 'proposed'. That is not incidental: after sql/25,
+-- Every insert here lands at 'proposed'. That is not incidental: after sql/26,
 -- inserting at 'current' is rejected by the status sanction, so a control that
 -- inserted at 'current' would go green on the wrong guard and stop proving the
 -- thing it names.
@@ -111,7 +111,7 @@ DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO t VALUES ('A','ctl_cannot_promote_twice',false,'accepted');
 EXCEPTION WHEN others THEN INSERT INTO t VALUES ('A','ctl_cannot_promote_twice',true,SQLERRM); END $c$;
 
--- An artifact id that does not exist is rejected. Post-sql/25 the classification
+-- An artifact id that does not exist is rejected. Post-sql/26 the classification
 -- allowlist catches this before the FK does (an unknown id has no action, and
 -- the allowlist requires action='import'), so this control no longer isolates
 -- FK integrity -- it is named for what it now proves, not what it used to.
@@ -194,7 +194,7 @@ EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('B','b6b_manual_cannot_self_confer_authority',true,SQLERRM); END $c$;
 
 -- B7: agent-authored content must not reach 'current' without explicit review.
--- Pre-sql/25 the schema permitted this whenever the agent declared
+-- Pre-sql/26 the schema permitted this whenever the agent declared
 -- provenance_basis='decision_record', with nothing verifying such a record
 -- existed. The citation below says so in as many words.
 DO $c$ BEGIN
@@ -355,7 +355,7 @@ EXCEPTION WHEN others THEN
 
 -- C9: a current row with no receipt reports 'unaudited', not 'match'. Silence
 -- about a row must never read as a clean bill of health -- every row promoted
--- BEFORE sql/25 is in exactly this state.
+-- BEFORE sql/26 is in exactly this state.
 --
 -- The unaudited row is produced by arming the GUC and inserting at 'current'
 -- directly, which is precisely how a pre-migration row looks: authoritative,
@@ -381,8 +381,8 @@ EXCEPTION WHEN others THEN
 -- ══════════════════════════════════════════════════════════════════════════
 
 -- D1: app.promoting is a session GUC. Any caller holding service_role can arm it
--- and walk through every guard in sql/25. This closes the ACCIDENTAL path, not
--- the deliberate one. Recorded in sql/13, sql/20 and sql/25; asserted here so it
+-- and walk through every guard in sql/26. This closes the ACCIDENTAL path, not
+-- the deliberate one. Recorded in sql/13, sql/20 and sql/26; asserted here so it
 -- is visible in test output rather than only in prose.
 -- Closing it for real requires per-principal connection identity (vault_auth),
 -- not another trigger.
@@ -401,9 +401,9 @@ DO $c$ DECLARE v uuid; BEGIN
 EXCEPTION WHEN others THEN
   PERFORM set_config('app.promoting','off',true);
   INSERT INTO t VALUES ('D','limit_caller_can_self_arm_promotion_guard',false,
-    'enforcement changed -- sql/13, sql/20, sql/25 and STATUS.md now overstate the limit: '||SQLERRM); END $c$;
+    'enforcement changed -- sql/13, sql/20, sql/26 and STATUS.md now overstate the limit: '||SQLERRM); END $c$;
 
--- D2: the same GUC also opens the INSERT path added by sql/25. Stated separately
+-- D2: the same GUC also opens the INSERT path added by sql/26. Stated separately
 -- because a reader could reasonably assume the new BEFORE INSERT guard is
 -- stronger than the older BEFORE UPDATE one. It is not; it is the same GUC.
 DO $c$ BEGIN
