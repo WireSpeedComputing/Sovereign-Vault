@@ -1,4 +1,4 @@
--- 23_wiki_supersession.sql
+-- 24_wiki_supersession.sql
 --
 -- Wiki page supersession. Upstream issue #71 — CLOSED on this deployment.
 --

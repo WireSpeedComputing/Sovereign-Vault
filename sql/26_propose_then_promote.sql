@@ -1,4 +1,4 @@
--- 25_propose_then_promote.sql
+-- 26_propose_then_promote.sql
 --
 -- ADOPT: upstream sovereign-memory-core #46 (review/promotion guards) and #47
 -- (promoted-record mutation audit). One file because they are one mechanism:
@@ -66,7 +66,7 @@ revoke execute on function enforce_insert_status_sanction() from anon, authentic
 
 -- memories ONLY, deliberately. wiki_pages is NOT gated here: it has no
 -- promote_wiki(), its column default is status='current', and supersede_wiki()
--- (sql/23) only replaces an already-current page. Gating wiki INSERT would make
+-- (sql/24) only replaces an already-current page. Gating wiki INSERT would make
 -- wiki_pages uncreatable with no sanctioned path to create one. Closing that
 -- asymmetry needs a promote_wiki() first; recorded as an open item in STATUS.md
 -- rather than shipped as a break.

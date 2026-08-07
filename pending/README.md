@@ -16,7 +16,7 @@ Nothing in this directory has been applied to any deployment.
 ### Graduated
 
 `A_wiki_supersession_ISSUE71.sql` was approved and applied as deployment
-migration 37 on 2026-08-07. It now lives at `sql/23_wiki_supersession.sql`.
+migration 37 on 2026-08-07. It now lives at `sql/24_wiki_supersession.sql`.
 Upstream #71 is closed on this deployment.
 
 ## Before applying

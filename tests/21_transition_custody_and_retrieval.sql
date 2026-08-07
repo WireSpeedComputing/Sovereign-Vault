@@ -18,7 +18,7 @@ INSERT INTO principals (id,kind,display_name,agent_label) VALUES
  ('33333333-3333-3333-3333-333333333333','agent','A1','A1');
 
 -- Lands 'proposed' and reaches 'current' through the human gate. Since
--- sql/25_propose_then_promote.sql, a direct INSERT at 'current' is rejected --
+-- sql/26_propose_then_promote.sql, a direct INSERT at 'current' is rejected --
 -- this file previously did exactly that, and updating it is part of the fix
 -- rather than a workaround for it. The path under test starts from a genuinely
 -- promoted row, which is now the only kind there is.
