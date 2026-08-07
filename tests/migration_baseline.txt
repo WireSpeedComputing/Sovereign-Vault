@@ -1,0 +1,27 @@
+20260729174800
+BASELINE_REPO_FILE=21
+
+# Drift-check baseline for tests/migration_drift.sh.
+#
+# Deployment migrations at or before this version are OUT OF SCOPE for the
+# inventory check. Everything after it must declare a `-- MIGRATION: <name>`
+# line in exactly one sql/*.sql file.
+#
+# Why this line and not zero: the mapping from the 33 migrations up to
+# 32_retrieve_context_budget_edge onto sql/00-21 is many-to-one -- several fix
+# migrations were folded into a single repo file -- and that mapping was never
+# recorded at the time. Reconstructing it from migration NAMES would be a guess
+# presented as an inventory, which is the same move as retyping applied DDL
+# from a description. This project has refused that three times; it should not
+# start now in the tool built to catch it.
+#
+# Lower this baseline whenever someone verifies an older mapping against the
+# applied DDL rather than against its name. Lowering it is progress; raising it
+# is how a check quietly stops checking.
+
+# BASELINE_REPO_FILE is the highest sql/NN_*.sql number covered by the baseline
+# above. Files at or below it are historical: applied long ago, carrying no
+# MIGRATION: header because the mapping was never recorded. The check lists them
+# separately from files that are genuinely not applied yet, so the "not applied"
+# list stays short enough to actually read. Raise it in lockstep whenever the
+# version baseline is lowered and a file gains its header.

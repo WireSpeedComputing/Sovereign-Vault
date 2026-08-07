@@ -1,5 +1,9 @@
 -- 23_identity_capability_enforcement.sql
 --
+-- MIGRATION: 34_has_capability_active_principal_guard
+-- MIGRATION: 35_vault_auth_identity_binding_zero_access
+-- MIGRATION: 36_vault_auth_binding_fk_indexes
+--
 -- Identity is derived only on the authenticated runtime path. A shared direct
 -- Postgres/service credential remains an administrative control plane and is
 -- never treated as proof of a human or agent identity.

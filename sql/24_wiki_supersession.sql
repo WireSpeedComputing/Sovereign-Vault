@@ -1,5 +1,7 @@
 -- 24_wiki_supersession.sql
 --
+-- MIGRATION: 37_wiki_supersession_issue71
+--
 -- Wiki page supersession. Upstream issue #71 — CLOSED on this deployment.
 --
 -- APPLIED as deployment migration 37, 2026-08-07, on owner approval. Was staged
