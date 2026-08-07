@@ -259,6 +259,30 @@ EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('B','b9_supersession_still_works',false,SQLERRM); END $c$;
 
 
+-- B10: an agent-proposed, human-promoted row must remain CORRECTABLE.
+-- Before the successor-authorship fix this was a dead end: supersede_memory
+-- copied source_kind forward, so the successor was agent-sourced at 'current',
+-- which enforce_agent_cannot_self_attest rejects for every basis except
+-- decision_record. A domain policy excluding decision_record (sql/31 medical,
+-- legal) made such a row permanently uncorrectable.
+DO $c$ DECLARE v uuid; v2 uuid; BEGIN
+  INSERT INTO memories (content, source_kind, source_agent, provenance_basis, citation,
+                        status, owner, visibility)
+  VALUES ('agent-proposed sourced fact','agent','A1','source_document','doc p.2',
+          'proposed','11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  v2 := supersede_memory(v,'corrected fact','source_document','doc p.3',
+                         '11111111-1111-1111-1111-111111111111','correction');
+  INSERT INTO t VALUES ('B','b10_agent_proposed_row_stays_correctable',
+    (SELECT source_kind='manual' AND source_agent IS NULL FROM memories WHERE id=v2),
+    'successor is recorded as human-authored, which is what it is');
+  INSERT INTO t VALUES ('B','b10b_predecessor_authorship_preserved',
+    (SELECT metadata->>'corrected_from_source_kind'='agent'
+        AND metadata->>'corrected_from_source_agent'='A1' FROM memories WHERE id=v2),
+    'original authorship kept in metadata, not erased');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('B','b10_agent_proposed_row_stays_correctable',false,SQLERRM); END $c$;
+
 -- ══════════════════════════════════════════════════════════════════════════
 -- SECTION C — #47 PROMOTED-RECORD MUTATION AUDIT. All must be TRUE.
 -- ══════════════════════════════════════════════════════════════════════════

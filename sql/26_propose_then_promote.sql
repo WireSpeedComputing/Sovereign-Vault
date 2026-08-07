@@ -375,14 +375,33 @@ begin
       content, workstream, tags, source_kind, source_agent, source_ref,
       provenance_basis, citation, status, supersedes, source_artifact_id,
       effective_from, recorded_at, owner, visibility, metadata
+    -- The successor is authored by the HUMAN who called this function, not by
+    -- whoever wrote the predecessor. Copying source_kind forward said otherwise
+    -- and created a dead end: an agent-proposed row, once promoted by a human,
+    -- produced an agent-sourced successor at status='current', which
+    -- enforce_agent_cannot_self_attest (sql/03) rejects for every basis except
+    -- decision_record. Under sql/31's medical and legal policies, which exclude
+    -- decision_record, such a row became PERMANENTLY UNCORRECTABLE.
+    --
+    -- Verified end to end before changing this: agent proposes a sourced medical
+    -- fact, human promotes it, human attempts a correction -> rejected. Two
+    -- individually-correct rules composing into a dead end, which is the third
+    -- instance of that pattern in this batch.
+    --
+    -- The successor is therefore recorded as manual/human-authored, which is
+    -- what it is: this function already requires an active human principal and
+    -- refuses anything else. The predecessor's authorship is not lost -- it is
+    -- preserved in metadata and reachable through the supersedes link.
     ) values (
-      p_new_content, v_old.workstream, v_old.tags, v_old.source_kind, v_old.source_agent,
+      p_new_content, v_old.workstream, v_old.tags, 'manual', null,
       v_old.source_ref, p_new_provenance_basis, p_new_citation, 'current', p_old_id,
       v_old.source_artifact_id, now(), now(), v_old.owner, v_old.visibility,
       v_old.metadata || jsonb_build_object(
         'supersede_reason', p_reason,
         'supersede_actor', p_acting_principal,
-        'actor_assurance', 'caller_asserted_unauthenticated')
+        'actor_assurance', 'caller_asserted_unauthenticated',
+        'corrected_from_source_kind', v_old.source_kind,
+        'corrected_from_source_agent', v_old.source_agent)
     ) returning id into v_new_id;
 
     set local app.promoting = 'off';
