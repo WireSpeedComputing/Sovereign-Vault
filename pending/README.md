@@ -10,21 +10,28 @@ Nothing in this directory has been applied to any deployment.
 
 | File | Upstream | State |
 |---|---|---|
-| `A_wiki_supersession_ISSUE71.sql` | #71 | **Complete.** Dry-run end-to-end against the live database in a rolled-back transaction, 2026-08-07. All assertions passed, zero residue. |
 | `B_retrieval_topology_ISSUE72.sql` | #72 | **Partial.** Part 1 (table + seed) dry-run tested. Part 2 (the `retrieve_context` envelope change) is a design note only — not written, not tested. |
+| `C_retrieval_projection_refresh.sql` | — | **Complete, untested against a deployment.** Incremental per-row maintenance of the retrieval projection. Replay-tested only. |
 
-## Before applying either
+### Graduated
+
+`A_wiki_supersession_ISSUE71.sql` was approved and applied as deployment
+migration 37 on 2026-08-07. It now lives at `sql/23_wiki_supersession.sql`.
+Upstream #71 is closed on this deployment.
+
+## Before applying
 
 Re-run the preflight; the dry runs were point-in-time and the database has
 changed since.
 
-For A: confirm `wiki_pages_path_key` still exists, that there are still zero
-duplicate active paths, and that no new inbound FK references `path`. A is
-reversible only while zero duplicate active paths exist — once two versions
-share a path, the original `UNIQUE(path)` cannot be restored.
-
 For B: Part 2 must be built and tested first. Applying Part 1 alone creates a
 topology table that nothing reads, which is harmless but achieves nothing.
+
+For C: it replaces no existing object and adds triggers to `memories` and
+`wiki_pages`. Confirm the deployment's projection is current (run
+`refresh_retrieval_units()` once) *before* applying, or the triggers will
+maintain a projection that was already stale — incremental maintenance corrects
+nothing retroactively. See the file header.
 
 ## Why A includes a function
 
