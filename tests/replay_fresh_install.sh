@@ -18,6 +18,13 @@
 
 set -uo pipefail
 
+# macOS/Homebrew PG17 aborts at startup with "postmaster became multithreaded
+# during startup" when the inherited locale is not one initdb can resolve --
+# the postmaster's own HINT is to set LC_ALL. This script had been passing on
+# this host and started failing on nothing but a locale change, so pin it
+# rather than leave the harness dependent on the caller's shell.
+export LC_ALL="${LC_ALL:-C}"
+
 SQL_DIR="${1:-$(cd "$(dirname "$0")/../sql" && pwd)}"
 PORT="${REPLAY_PORT:-5433}"
 PGDATA_DIR="${REPLAY_PGDATA:-/tmp/svreplay_pgdata}"
