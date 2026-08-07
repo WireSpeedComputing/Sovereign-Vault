@@ -172,10 +172,16 @@ that fabricated `request.jwt.claims`. A definer wrapper would rewrite
 says so in a comment, because "harden this by making it DEFINER" is exactly the
 change a future reader would think is an improvement.
 
-## Retrieval ACL drift — FIXED, NOT YET APPLIED (2026-08-07)
+## Retrieval ACL drift — FIXED AND APPLIED (2026-08-07)
 
 `sql/27_retrieval_acl_drift_fix.sql` plus `tests/27_retrieval_acl_drift.sql`
 (11 assertions, all passing on a fresh replay).
+
+**APPLIED as deployment migration 39** (20260807182313) by the owner. This
+heading previously read "NOT YET APPLIED" and stayed wrong after the apply --
+caught when an agent citing this file upstream checked `sql/27`'s own header
+instead and found the two disagreed. A summary that contradicts the artifact it
+summarises is worse than no summary, because it is the thing people quote.
 
 The invalidation predicate in `refresh_retrieval_units()` now compares `owner`,
 `visibility` and `workstream` alongside status and content hash, so a full
@@ -314,7 +320,7 @@ enforcement needs per-principal connection identity (`vault_auth`).
 `tests/23` section D asserts the bypasses still work so the limit shows up in
 test output; if a section D test starts failing, the docs are now wrong.
 
-**Tests.** `tests/23_promotion_guards_negative.sql`: 28 assertions across four
+**Tests.** `tests/23_promotion_guards_negative.sql`: 31 assertions across four
 sections — 7 positive controls over pre-existing guards, 10 forbidden paths, 9
 mutation-audit cases, 2 documented limits. All pass on a fresh replay. The
 controls exist because a negative-test file with no control proves only that it

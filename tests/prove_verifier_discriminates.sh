@@ -233,7 +233,11 @@ run_case "J    a trigger is repointed at a different function" CAUGHT "J" \
 #   * condensed, semantics untouched            -> must verify CLEAN
 #   * condensed, ONE ACL predicate removed      -> must be CAUGHT by J
 #
-# The two differ by 32 characters out of ~3500. If the verifier called the first
+# The two differ by 51 characters out of ~3500 -- the deleted predicate is
+# `and ru.workstream is not distinct from m.workstream`, measured, not estimated.
+# (An earlier draft of this comment said 32 and disagreed with docs/07, which
+# said 51. docs/07 was right. Two numbers for one fact is how a document stops
+# being evidence.) If the verifier called the first
 # drift it would cry wolf on the real deployed/repo pair; if it called the second
 # clean it would miss the exact defect sql/27 exists to fix. Both directions on
 # the same body is the only way to show it is doing neither.
