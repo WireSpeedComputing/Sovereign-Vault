@@ -2,9 +2,9 @@
 --
 -- MIGRATION: 40_is_owner_or_shared_total_function
 --
--- APPLIED to the deployment 2026-08-07 as migration 40, by ORIGIN, before the
--- RLS policy work began. Filed here after the fact; that ordering was wrong and
--- is noted rather than hidden.
+-- APPLIED to the deployment 2026-08-07 as migration 40, before the RLS policy
+-- work began. Filed here after the fact; that ordering was wrong and is noted
+-- rather than hidden.
 --
 -- ── THE DEFECT ─────────────────────────────────────────────────────────────
 -- sql/14 defined the access predicate as:
