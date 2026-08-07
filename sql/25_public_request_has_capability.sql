@@ -1,5 +1,7 @@
 -- 25_public_request_has_capability.sql
 --
+-- MIGRATION: 38_public_request_has_capability_wrapper
+--
 -- APPLIED as deployment migration 38, 2026-08-07
 -- (20260807164705_38_public_request_has_capability_wrapper).
 --

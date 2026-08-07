@@ -1,5 +1,7 @@
 -- 22_wiki_pages_source_agent_parity.sql
 --
+-- MIGRATION: 33_wiki_pages_source_agent_parity
+--
 -- Schema asymmetry found while writing the first agent-authored wiki page:
 -- memories carries source_agent, wiki_pages did not. So an agent-authored
 -- reference document had no field recording WHICH agent wrote it, and
