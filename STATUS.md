@@ -1,7 +1,9 @@
 # STATUS
 
-Last updated: 2026-08-07. Most recent work: "Governed retrieval, Phase C", "Transition concurrency + actor custody", "Fresh-install replay", and
-"Disease-claim false negative" below. The replay is reproducible — run
+Last updated: 2026-08-07. Most recent work: "Propose-then-promote", "Retrieval
+projection", "Wiki supersession", "Identity and capability enforcement",
+"Governed retrieval, Phase C" and "Transition concurrency + actor custody"
+below. The replay is reproducible — run
 `tests/replay_fresh_install.sh` rather than trusting this file. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance tests were
 executed for real, not just reasoned about. Results below. This was NOT
@@ -153,6 +155,52 @@ Documentation: `docs/04-record-lifecycle.md`.
 this deployment. Staged as `pending/A_wiki_supersession_ISSUE71.sql` until
 approval, then moved into `sql/` — `pending/` exists precisely so an unapproved
 migration is not swept into a replay that would then prove something untrue.
+## Identity and capability enforcement — FOUNDATION APPLIED (2026-08-03)
+
+The shared administrative credential was correctly identified as authority,
+not identity. Worse, a direct database session can set JWT-shaped request
+configuration itself, so any resolver that trusts `request.jwt.claims` without
+checking connection provenance would convert honest uncertainty into false
+human attribution.
+
+`sql/23` adds a private `vault_auth` layer. `(issuer, sub)` maps a verified
+human and `(issuer, client_id)` maps an agent surface. Direct human requests
+require the human grant; agent-mediated requests require the intersection of
+the human and agent grants. The request gate trusts claims only when
+`session_user = 'authenticator'`; administrative sessions fail closed even if
+they set fabricated claims. The gate deliberately remains security-invoker so
+the original session user is preserved.
+
+The same file fixes a latent correctness defect: `has_capability()` previously
+ignored `principals.active`, so a deactivated principal would regain authority
+as soon as any grant existed. Exact-scope behavior is preserved. Wildcard
+semantics were deliberately not added and require a separate review.
+
+The schema creates zero bindings and zero grants. Its two tables have RLS and
+FORCE RLS with no policies, and no direct privileges for `anon`,
+`authenticated`, or `service_role`. `authenticated` receives only schema usage
+and execute on the boolean `request_has_capability` entry point. Binding
+mutations require review/provenance fields and produce append-only audit
+receipts including `jti` or `session_id` when present.
+
+Transactional verification covers active/deactivated capability behavior;
+reviewed human and agent resolution; unknown, expired, superseded, and
+deactivated denial; human/agent intersection; audit receipts; and forged
+administrative claims returning `false`, never `NULL`. See
+`tests/22_identity_capability_enforcement.sql`.
+
+Verified on a fresh PostgreSQL 17 database: all 24 SQL files replay clean,
+`perimeter_assert()` returns zero rows, every public table has RLS, and the
+integrated identity regression passes with no persistent fixtures. The same
+zero-binding/zero-grant layer was independently verified on a real Supabase
+PostgreSQL 17 deployment.
+
+**Not activated.** Before the first binding: observe a real PostgREST request
+and verify `session_user`; inspect a real signed Auth/OAuth token and confirm
+issuer-controlled `client_id` plus token/session identifiers; add only reviewed
+deployment bindings and exact-scope grants; and replace caller-supplied
+principal retrieval with a derived-identity entry point. See
+`docs/03-identity-capability-enforcement.md` for the complete gate.
 
 ## Governed retrieval, Phase C - IMPLEMENTED (2026-07-29)
 
