@@ -70,6 +70,26 @@ revoke execute on function enforce_insert_status_sanction() from anon, authentic
 -- wiki_pages uncreatable with no sanctioned path to create one. Closing that
 -- asymmetry needs a promote_wiki() first; recorded as an open item in STATUS.md
 -- rather than shipped as a break.
+-- ── The column default must move too, or this guard breaks every writer ────
+-- memories.status DEFAULTS to 'current' (sql/01). So an ordinary writer that
+-- never mentions status at all gets 'current' by default and is rejected by the
+-- trigger above -- with an error naming a value the caller never set.
+--
+-- Found by verification after the trigger was written, not by design: an insert
+-- omitting status was rejected with "direct INSERT at status=current is not
+-- permitted", which is true, baffling, and would have broken every existing
+-- writer on the day this was applied.
+--
+-- Moving the default to 'proposed' is the fix, and it is the doctrine stated as
+-- a default rather than as a trap: everything lands proposed unless a
+-- sanctioned function says otherwise. supersede_memory() and the promotion path
+-- set status explicitly, so neither depends on the default.
+--
+-- wiki_pages keeps its 'current' default deliberately -- it is not gated by
+-- this trigger, has no promote_wiki(), and changing its default would make
+-- every wiki write land in a state nothing can promote out of.
+alter table memories alter column status set default 'proposed';
+
 drop trigger if exists trg_insert_status_sanction_memories on memories;
 create trigger trg_insert_status_sanction_memories
   before insert on memories
