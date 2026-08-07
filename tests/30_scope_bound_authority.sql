@@ -249,4 +249,14 @@ SELECT 'GUARD_no_null_assertions' AS summary,
        count(*) FILTER (WHERE pass IS NULL)::text||' assertion(s) evaluated to NULL' AS detail
 FROM t;
 
+-- ── EXPLICIT VERDICT ──────────────────────────────────────────────────────
+-- The runner reads THIS line, not the formatted rows above. Grepping output
+-- for '| f |' was wrong in both directions: it missed assertions that
+-- evaluated to NULL (blank cell), and it invented failures in files that
+-- legitimately print boolean `actual`/`expected` data columns. A test suite
+-- must state its own verdict rather than have one inferred from its table
+-- formatting.
+SELECT CASE WHEN bool_and(coalesce(pass,false)) THEN 'SUITE_RESULT: PASS'
+            ELSE 'SUITE_RESULT: FAIL' END AS verdict FROM t;
+
 ROLLBACK;

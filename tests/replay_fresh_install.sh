@@ -110,15 +110,34 @@ for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
     SUITE_FAILED=1
     continue
   fi
-  # These files exit 0 even when an assertion is false: the convention is that
-  # every `pass` column reads t. A false anywhere is a failure. Matches a lone
-  # f in a psql column, whether mid-row or last.
-  if echo "$out" | grep -qE '\|[[:space:]]*f[[:space:]]*(\||$)'; then
+  # ── READ THE VERDICT, DO NOT INFER IT ──────────────────────────────────
+  # These files exit 0 even when an assertion is false, so the runner has to
+  # decide. It used to grep the formatted output for '| f |'. That was wrong in
+  # BOTH directions:
+  #   * an assertion evaluating to NULL prints a BLANK cell, so real failures
+  #     were invisible (21 of 24 assertions once "passed" against a function
+  #     that lacked the feature entirely);
+  #   * a file that legitimately prints boolean `actual`/`expected` data columns
+  #     matched the pattern and was reported as failing when every assertion
+  #     passed.
+  # A suite must state its own verdict. Files emit `SUITE_RESULT: PASS|FAIL`.
+  if echo "$out" | grep -q 'SUITE_RESULT: FAIL'; then
     echo "  FAIL  $(basename "$tf")"
-    echo "$out" | grep -E '\|[[:space:]]*f[[:space:]]*(\||$)' | head -8 | sed 's/^/        /'
+    echo "$out" | grep -E 'SUITE_RESULT|\| f ' | head -8 | sed 's/^/        /'
     SUITE_FAILED=1
-  else
+  elif echo "$out" | grep -q 'SUITE_RESULT: PASS'; then
     echo "  PASS  $(basename "$tf")"
+  else
+    # No verdict. Fall back to the legacy heuristic, but say so -- an
+    # unreliable check silently standing in for a reliable one is the failure
+    # this whole change is about.
+    if echo "$out" | grep -qE '\|[[:space:]]*f[[:space:]]*(\||$)'; then
+      echo "  FAIL  $(basename "$tf") (legacy heuristic, no SUITE_RESULT verdict)"
+      echo "$out" | grep -E '\|[[:space:]]*f[[:space:]]*(\||$)' | head -8 | sed 's/^/        /'
+      SUITE_FAILED=1
+    else
+      echo "  PASS? $(basename "$tf") (legacy heuristic, no SUITE_RESULT verdict -- add one)"
+    fi
   fi
 done
 [ "$SUITE_FAILED" -ne 0 ] && { echo "VALIDATION SUITE FAILED"; exit 1; }

@@ -51,6 +51,15 @@ FROM (VALUES (NULL::uuid), ('11111111-1111-1111-1111-111111111111'::uuid)) a(o)
 CROSS JOIN (VALUES (NULL::visibility_level), ('private'), ('shared')) b(v)
 CROSS JOIN (VALUES (NULL::uuid), ('11111111-1111-1111-1111-111111111111'::uuid)) c(pr);
 
+-- Explicit verdict for the runner. See the note in the other test files: a
+-- grep over formatted output cannot tell a failing assertion from a boolean
+-- data column, and this file prints both.
+SELECT CASE WHEN bool_and(coalesce(is_owner_or_shared(o,v,pr) IS NOT NULL, false))
+            THEN 'SUITE_RESULT: PASS' ELSE 'SUITE_RESULT: FAIL' END AS verdict
+FROM (VALUES (NULL::uuid), ('11111111-1111-1111-1111-111111111111'::uuid)) a(o)
+CROSS JOIN (VALUES (NULL::visibility_level), ('private'), ('shared')) b(v)
+CROSS JOIN (VALUES (NULL::uuid), ('11111111-1111-1111-1111-111111111111'::uuid)) c(pr);
+
 ROLLBACK;
 
 -- Expected: every pass column 't'. A blank pass column is itself a failure of
