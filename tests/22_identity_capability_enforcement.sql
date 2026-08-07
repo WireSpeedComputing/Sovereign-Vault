@@ -51,15 +51,25 @@ begin
     ('expired', expired_id),
     ('superseded', superseded_id);
 
+  -- sql/30 added a foreign key from capability_grants.resource_scope to
+  -- scope_registry, so a scope must be declared before it can be granted. The
+  -- ad-hoc string this file used ('table:memories') is no longer grantable -- and
+  -- 'test' is not a scope kind, deliberately. Registering a real scope here
+  -- keeps the test's subject unchanged: it exercises identity-to-capability
+  -- resolution, for which the particular scope string was always arbitrary.
+  insert into public.scope_registry(scope, kind, identifier, description, declared_by)
+  values ('table:memories','table','memories','Grant target for identity tests', reviewer_id)
+  on conflict (scope) do nothing;
+
   insert into public.capability_grants(principal_id, resource_scope, permissions, granted_by, reason)
   values
-    (human_id, 'test:scope', array['read']::public.capability_permission[], reviewer_id, 'transactional test; rollback required'),
-    (inactive_id, 'test:scope', array['admin']::public.capability_permission[], reviewer_id, 'transactional test; rollback required'),
-    (agent_id, 'test:scope', array['read']::public.capability_permission[], reviewer_id, 'transactional test; rollback required');
+    (human_id, 'table:memories', array['read']::public.capability_permission[], reviewer_id, 'transactional test; rollback required'),
+    (inactive_id, 'table:memories', array['admin']::public.capability_permission[], reviewer_id, 'transactional test; rollback required'),
+    (agent_id, 'table:memories', array['read']::public.capability_permission[], reviewer_id, 'transactional test; rollback required');
 
-  assert public.has_capability(human_id, 'test:scope', 'read'),
+  assert public.has_capability(human_id, 'table:memories', 'read'),
     'active principal exact capability must be true';
-  assert not public.has_capability(inactive_id, 'test:scope', 'read'),
+  assert not public.has_capability(inactive_id, 'table:memories', 'read'),
     'inactive principal must be denied even with admin grant';
   assert not public.has_capability(human_id, 'test:*', 'read'),
     'wildcard scope behavior must remain absent';
@@ -126,9 +136,9 @@ begin
   );
   assert vault_auth.current_human_principal_id() is null,
     'administrative session must not trust forged claims';
-  assert vault_auth.request_has_capability('test:scope','read') is false,
+  assert vault_auth.request_has_capability('table:memories','read') is false,
     'administrative session with forged claims must return false';
-  assert vault_auth.request_has_capability('test:scope','read') is not null,
+  assert vault_auth.request_has_capability('table:memories','read') is not null,
     'request capability must never return null';
 
   assert (select count(*) from vault_auth.principal_identity_binding_audit) = 5,
@@ -148,9 +158,9 @@ begin
     'direct administrative path must not impersonate the PostgREST authenticator session';
   assert current_user = 'authenticated',
     'test must prove current_user alone cannot establish request provenance';
-  assert vault_auth.request_has_capability('test:scope','read') is false,
+  assert vault_auth.request_has_capability('table:memories','read') is false,
     'administrative path with authenticated current_user and forged claims must be denied';
-  assert vault_auth.request_has_capability('test:scope','read') is not null,
+  assert vault_auth.request_has_capability('table:memories','read') is not null,
     'administrative denial must be false, never null';
 end;
 $test$;
