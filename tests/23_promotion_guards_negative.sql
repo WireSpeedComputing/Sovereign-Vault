@@ -159,6 +159,21 @@ BEGIN
   END LOOP;
 END $c$;
 
+-- B4b: an ordinary writer that never mentions status must still work. The
+-- column default was 'current' (sql/01), so before sql/26 moved it to
+-- 'proposed' this insert was rejected with an error naming a value the caller
+-- never set -- which would have broken every existing writer on apply day.
+-- This asserts the default and the guard agree.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, owner, visibility)
+  VALUES ('ordinary write, status omitted','manual','human_direct',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  INSERT INTO t VALUES ('B','b4b_status_omitted_write_lands_proposed',
+    (SELECT status='proposed' FROM memories WHERE id=v),
+    'default is proposed, so omitting status is not a trap');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('B','b4b_status_omitted_write_lands_proposed',false,SQLERRM); END $c$;
+
 -- B5: a structurally valid import package must not, by itself, confer authority.
 DO $c$ BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, citation, status,
