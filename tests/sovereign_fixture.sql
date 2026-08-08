@@ -64,7 +64,20 @@ insert into scope_registry (scope, kind, identifier, description, declared_by) v
 
 update scope_registry set retired_at = '2026-01-02T00:00:00Z' where scope = 'workstream:archive';
 
+-- The founder's grant was added after the scope model landed. Before it, the
+-- probe actor -- the first active human, which is the founder -- held no
+-- capability at all, so retrieve_context() correctly returned nothing and the
+-- POSITIVE probe positive.retrieve_context_envelope failed with
+-- EXPECT:ACCEPTED RESULT:REJECTED.
+--
+-- Worth recording because it is the fourth fixture in this repo that quietly
+-- became an unauthorized principal when the authorization model gained a
+-- dimension: tests/32, tests/40, this fixture, and the task-board suite. In
+-- every case every DENIAL assertion kept passing. The only checks that noticed
+-- were the positive controls. A suite of denials cannot tell "correctly
+-- restricted" from "entitled to nothing".
 insert into capability_grants (id, principal_id, resource_scope, permissions, granted_by, reason) values
+  ('22222222-0000-4000-8000-000000000009','11111111-0000-4000-8000-000000000001','workstream:fixture','{read,propose,write,admin}','11111111-0000-4000-8000-000000000001','founder holds the fixture stream; without this the positive probes have no entitled principal to prove anything with'),
   ('22222222-0000-4000-8000-000000000001','11111111-0000-4000-8000-000000000002','workstream:fixture','{read,propose}','11111111-0000-4000-8000-000000000001','reviewer works this stream'),
   ('22222222-0000-4000-8000-000000000002','11111111-0000-4000-8000-000000000003','table:memories','{read}','11111111-0000-4000-8000-000000000001','agent may read'),
   ('22222222-0000-4000-8000-000000000003','11111111-0000-4000-8000-000000000002','domain:financial','{admin}','11111111-0000-4000-8000-000000000001','to be revoked below');

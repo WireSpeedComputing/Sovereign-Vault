@@ -338,7 +338,19 @@ echo "-- I migration drift inventory --"
 grep -ohE '^-- MIGRATION: [A-Za-z0-9_.-]+' "$PKG"/schema/sql/*.sql 2>/dev/null \
   | sed 's/^-- MIGRATION: //' | sort \
   | awk '{printf "20260807999999\t%s\n", $0}' > "$WORK/applied.tsv"
-if bash "$TESTS_DIR/migration_drift.sh" "$WORK/applied.tsv" > "$WORK/drift.txt" 2>&1; then
+# Exit 3 from migration_drift.sh means the INVENTORY reconciles but migration
+# body coverage is unverified. That is a statement about the project, not about
+# whether this restore is faithful, so it does not fail check I -- it is
+# reported here and gates the sovereignty claim in sovereignty_proof.sh instead.
+bash "$TESTS_DIR/migration_drift.sh" "$WORK/applied.tsv" > "$WORK/drift.txt" 2>&1
+DRIFT_RC=$?
+if [ "$DRIFT_RC" -eq 3 ]; then
+  echo "        NOTE: migration inventory reconciles; BODY COVERAGE UNVERIFIED."
+  echo "        Not a restore-fidelity failure. Recoverability is reported"
+  echo "        separately and gates the sovereignty verdict."
+  : > "$WORK/body_coverage_unverified"
+fi
+if [ "$DRIFT_RC" -eq 0 ] || [ "$DRIFT_RC" -eq 3 ]; then
   ok "I migration inventory reconciles in the restored environment"
   note "$(grep -c . "$WORK/applied.tsv") declared migration(s); see the package's sql copies"
   note "LIMIT: inventory only. A file present but stale reads as clean here --"

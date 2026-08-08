@@ -146,7 +146,14 @@ echo "  distinct clusters confirmed."
 # ── 4. verify ─────────────────────────────────────────────────────────────
 banner "4/5  VERIFY THE RESTORE"
 VERIFY_RC=0
-bash "$TESTS_DIR/verify_restore.sh" "$PKG_DIR" "$DST_DB" || VERIFY_RC=1
+BODY_UNVERIFIED=0
+bash "$TESTS_DIR/verify_restore.sh" "$PKG_DIR" "$DST_DB" 2>&1 | tee "$PKG_DIR/../sovproof_verify.out"
+VERIFY_RC=${PIPESTATUS[0]}
+# Recoverability is a separate question from restore fidelity, and it gates the
+# SOVEREIGNTY claim even when every restore check passes. A faithful restore of
+# a schema whose migration bodies exist only inside one hosted database does not
+# demonstrate sovereignty; it demonstrates that this copy matched that copy.
+grep -q "BODY COVERAGE UNVERIFIED" "$PKG_DIR/../sovproof_verify.out" && BODY_UNVERIFIED=1
 [ "$VERIFY_RC" -eq 0 ] || die "verification"
 
 # ── 5. prove the verifier can fail ────────────────────────────────────────
@@ -163,7 +170,13 @@ else
   bash "$TESTS_DIR/prove_verifier_discriminates.sh" "$PKG_DIR" "$DST_DB" || die "discrimination proof"
 fi
 
-banner "SOVEREIGNTY PROOF COMPLETE"
+if [ "$SKIP_DISC" -eq 1 ]; then
+  banner "SOVEREIGNTY PROOF INCOMPLETE -- DISCRIMINATION NOT PROVEN"
+elif [ "$BODY_UNVERIFIED" -eq 1 ]; then
+  banner "SOVEREIGNTY PROOF INCOMPLETE -- RECOVERABILITY NOT ESTABLISHED"
+else
+  banner "SOVEREIGNTY PROOF COMPLETE"
+fi
 echo " started  (UTC): $STARTED"
 echo " finished (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo " package       : $PKG_DIR"
@@ -178,11 +191,18 @@ echo "     bodies, signatures, ownership, security mode, search paths, grants,"
 echo "     triggers, policies, constraints and indexes -- not object names"
 echo "   * every guard, probe and integrity surface behaves identically after"
 echo "     the restore as before the export"
-[ "$SKIP_DISC" -eq 0 ] && \
-echo "   * the verification CAN fail, and fails on the INTENDED check for each"
-echo "     of 22 deliberate corruptions -- including the exact sql/27 body with"
-echo "     one ACL predicate removed -- while correctly ignoring that same body"
-echo "     condensed the way the applied migration condensed it"
+# The `&&` line-continuation below used to guard only the FIRST echo. The three
+# that followed were separate commands and ran unconditionally, so a run with
+# --skip-discrimination printed the tail of a sentence claiming 22 deliberate
+# corruptions had each failed on the intended check -- a claim about work that
+# had just been skipped. Grouped into an if-block so the conditional covers the
+# whole statement.
+if [ "$SKIP_DISC" -eq 0 ]; then
+  echo "   * the verification CAN fail, and fails on the INTENDED check for each"
+  echo "     of 22 deliberate corruptions -- including the exact sql/27 body with"
+  echo "     one ACL predicate removed -- while correctly ignoring that same body"
+  echo "     condensed the way the applied migration condensed it"
+fi
 echo "   * full write-up: docs/07-sovereignty-export-restore.md"
 echo
 echo " WHAT WAS NOT PROVEN -- see KNOWN LIMITATIONS in $PKG_DIR/MANIFEST.md"
@@ -201,5 +221,33 @@ if [ "$KEEP" -eq 1 ]; then
   echo "   source:      PGHOST=$SRC_SOCK PGPORT=$SRC_PORT psql -d $SRC_DB"
   echo "   destination: PGHOST=$DST_SOCK PGPORT=$DST_PORT psql -d $DST_DB"
   echo "   stop: pg_ctl -D $SRC_PGDATA stop -m fast; pg_ctl -D $DST_PGDATA stop -m fast"
+fi
+# ── EXIT STATUS: "everything that ran passed" is not "everything passed" ───
+# This script used to print COMPLETE and exit 0 on a run where step 5 was
+# skipped. The warning text was there and said the right thing -- and an exit
+# code is what CI, a cron job, and a person in a hurry actually read. A skip
+# indistinguishable from a verification is the exact failure this work exists to
+# prevent, reproduced by the tool that exists to prove it does not happen.
+#
+# Exit 2, not 1: a skipped run is not a FAILED run, and collapsing the two would
+# be its own lie in the other direction. Callers that require a complete proof
+# check for 0; callers that tolerate a partial run can distinguish 2 from 1.
+if [ "$BODY_UNVERIFIED" -eq 1 ] && [ "$SKIP_DISC" -eq 0 ]; then
+  echo
+  echo " EXIT 2 -- INCOMPLETE. Every restore check passed: this copy matches that"
+  echo " copy, at the level of definitions, and the verifier was proven able to"
+  echo " fail. What is NOT established is RECOVERABILITY -- migration body"
+  echo " coverage is unverified, so there is no evidence the deployment history"
+  echo " exists anywhere outside a hosted database. A faithful restore of a"
+  echo " schema you cannot rebuild is not sovereignty. Set BODIES_REPO and"
+  echo " re-run once the extraction has been done and pushed."
+  exit 2
+fi
+if [ "$SKIP_DISC" -eq 1 ]; then
+  echo
+  echo " EXIT 2 -- INCOMPLETE. Steps 1-4 passed. Step 5 did not run, so this run"
+  echo " does not establish that the verification is capable of failing. Re-run"
+  echo " without --skip-discrimination for a result that can be relied upon."
+  exit 2
 fi
 exit 0
