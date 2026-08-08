@@ -28,6 +28,24 @@ INSERT INTO capability_grants (principal_id, resource_scope, permissions, grante
 SELECT p.id,'workstream:unclassified','{read}'::capability_permission[], p.id
 FROM principals p WHERE p.kind='human';
 
+-- ── SIMULATING DRIFT AFTER MIGRATION 54 ───────────────────────────────────
+-- The incremental triggers (sql/41, migration 54) now sync the projection on
+-- every ACL-relevant write, so a plain UPDATE can no longer CREATE drift -- the
+-- trigger repairs it in the same statement. That is the triggers working.
+--
+-- The rescan's repair path still matters: it is what corrects drift that
+-- predates the triggers, or that accumulated while they were absent or
+-- disabled. So this file disables them around the mutation to produce exactly
+-- that state. Without this the tests read as "no drift found" and prove nothing
+-- about repair.
+CREATE OR REPLACE FUNCTION _t27_drift(p_id uuid, p_vis visibility_level)
+RETURNS void LANGUAGE plpgsql AS $f$
+BEGIN
+  ALTER TABLE memories DISABLE TRIGGER trg_sync_retrieval_memories_upd;
+  UPDATE memories SET visibility=p_vis WHERE id=p_id;
+  ALTER TABLE memories ENABLE TRIGGER trg_sync_retrieval_memories_upd;
+END $f$;
+
 -- ── 1. The regression, end to end: drift is created, detected, and repaired.
 DO $c$ DECLARE v uuid; m_before int; m_after int; drift_before int; drift_after int; r record;
 BEGIN
@@ -45,7 +63,7 @@ BEGIN
     'H2 matches while shared: '||m_before);
 
   -- create the drift: content unchanged, ACL changed
-  UPDATE memories SET visibility='private' WHERE id=v;
+  PERFORM _t27_drift(v,'private');
 
   SELECT count(*) INTO drift_before FROM retrieval_acl_drift();
   INSERT INTO t VALUES ('drift_is_detected', drift_before >= 1,
@@ -81,7 +99,9 @@ DO $c$ DECLARE v uuid; BEGIN
   PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
   PERFORM refresh_retrieval_units();
 
+  ALTER TABLE memories DISABLE TRIGGER trg_sync_retrieval_memories_upd;
   UPDATE memories SET owner='22222222-2222-2222-2222-222222222222' WHERE id=v;
+  ALTER TABLE memories ENABLE TRIGGER trg_sync_retrieval_memories_upd;
   PERFORM refresh_retrieval_units();
 
   INSERT INTO t VALUES ('owner_drift_repaired_new_owner_sees',
@@ -129,7 +149,7 @@ DO $c$ DECLARE v uuid; u uuid; n_stale int; BEGIN
     model_version, dimensions, embedding, rendered_text_hash)
   VALUES (u,'test','m','1',384,NULL,'hash');
 
-  UPDATE memories SET visibility='private' WHERE id=v;
+  PERFORM _t27_drift(v,'private');
   PERFORM refresh_retrieval_units();
 
   SELECT count(*) INTO n_stale FROM retrieval_embeddings
