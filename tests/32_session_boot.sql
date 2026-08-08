@@ -34,8 +34,28 @@
 -- reason tests/23 gives: memories and wiki_pages have RLS enabled with ZERO
 -- policies and everything revoked from anon/authenticated, so every production
 -- write arrives via service_role (BYPASSRLS) or a SECURITY DEFINER function.
--- session_boot is SECURITY DEFINER; its filtering is is_owner_or_shared(), and
--- that is what is under test here. RLS is not load-bearing on this path.
+-- session_boot is SECURITY DEFINER; its filtering is can_read_row(), and that
+-- is what is under test here. RLS is not load-bearing on this path.
+--
+-- ── UPDATED BY sql/43 (WO-14 Phase 1a) ──────────────────────────────────────
+-- This suite originally filtered on is_owner_or_shared() alone, and Section C
+-- FAILED the moment scope composition landed: its principals held no capability
+-- grants, so a correct implementation showed them nothing.
+--
+-- Worth being precise about what that means, because the tempting reading is
+-- that the fix broke the test. It is the other way round. Section C was
+-- asserting the PRE-SCOPE access model -- it required that owning a row be
+-- sufficient to read it -- and migration 43 ruled the opposite: scope NARROWS
+-- visibility, and union-with-visibility was rejected outright. So this suite was
+-- certifying the behaviour session_boot was later found defective for having.
+--
+-- A test can encode a superseded model and go on passing, and there is no
+-- signal that it has: it is green, it is specific, and it is wrong. Recorded
+-- because the fix here was to add the grants its fixtures always implied, NOT
+-- to weaken the assertions until they passed.
+--
+-- Section D was added at the same time to assert the ruling directly, so the
+-- semantics live in an assertion rather than in the absence of one.
 
 BEGIN;
 
@@ -52,6 +72,23 @@ INSERT INTO principals (id,kind,display_name,agent_label) VALUES
  ('33333333-3333-3333-3333-333333333333','agent','AG1','AG1');
 INSERT INTO principals (id,kind,display_name,email,active) VALUES
  ('44444444-4444-4444-4444-444444444444','human','P3-inactive','p3@example.com',false);
+-- P5 owns content and holds NO capability grant. The Section D case.
+INSERT INTO principals (id,kind,display_name,email) VALUES
+ ('55555555-5555-5555-5555-555555555555','human','P5-ungranted','p5@example.com');
+
+-- ── capability grants: required since sql/43 composed scope into this path ──
+-- Every fixture memory below carries a NULL workstream, which row_scope() maps
+-- to the reserved scope 'workstream:unclassified'. Granting read on it is what
+-- these fixtures always implicitly assumed; before scopes existed there was
+-- nothing to assume. P4 is deliberately left ungranted -- see Section D.
+INSERT INTO scope_registry (scope, kind, identifier, description) VALUES
+ ('workstream:unclassified','workstream','unclassified','reserved scope for rows carrying no workstream')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO capability_grants (principal_id, resource_scope, permissions, granted_by) VALUES
+ ('11111111-1111-1111-1111-111111111111','workstream:unclassified',ARRAY['read']::capability_permission[],'11111111-1111-1111-1111-111111111111'),
+ ('22222222-2222-2222-2222-222222222222','workstream:unclassified',ARRAY['read']::capability_permission[],'11111111-1111-1111-1111-111111111111'),
+ ('33333333-3333-3333-3333-333333333333','workstream:unclassified',ARRAY['read']::capability_permission[],'11111111-1111-1111-1111-111111111111');
 
 -- P2's private material. Every canary string is unique so a substring search of
 -- the whole envelope is conclusive.
@@ -96,6 +133,17 @@ END $f$;
 
 -- Retrieval projections, so retrieval_units_visible has something to count.
 SELECT refresh_retrieval_units();
+
+-- P5's own private material. P5 OWNS it and holds no scope grant, so under the
+-- composed rule P5 must not see it. Same shape as P1's fixture on purpose: the
+-- only difference between them is the grant.
+DO $f$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility, due_date, due_status)
+  VALUES ('CANARY-P5-OWN-UNGRANTED-MEMORY','manual','human_direct','proposed',
+          '55555555-5555-5555-5555-555555555555','private', now() + interval '5 days','pending')
+  RETURNING id INTO v;
+  PERFORM promote_memory(v,'55555555-5555-5555-5555-555555555555');
+END $f$;
 
 -- A review_queue row carrying free text that must never appear in any envelope.
 INSERT INTO review_queue (kind, detail, raised_by)
@@ -269,6 +317,40 @@ INSERT INTO t VALUES ('C','c5_symmetric_p2_sees_own_private',
           NOT LIKE '%CANARY-P1-OWN-PRIVATE-MEMORY%'),
   'P2 sees own private, not P1 private');
 
+-- ── C9-C11: the scope-composition ruling, asserted directly ────────────────
+-- Added with sql/43. These encode migration 43's ruling -- scope NARROWS
+-- visibility -- so that a future change back to owner-alone fails here instead
+-- of quietly passing everything else in this file.
+
+-- C9: OWNERSHIP IS NOT SUFFICIENT. P5 owns their own private row and holds no
+-- capability grant, so they must not see it. This is the assertion that would
+-- have caught the session_boot defect on the day scopes landed.
+INSERT INTO t VALUES ('C','c9_ownership_without_scope_is_not_enough',
+  (SELECT session_boot('55555555-5555-5555-5555-555555555555')::text
+          NOT LIKE '%CANARY-P5-OWN-UNGRANTED-MEMORY%'
+      AND (session_boot('55555555-5555-5555-5555-555555555555')
+           ->'health'->>'memories_current_visible')::int = 0),
+  'P5 owns the row, holds no scope, and must see nothing');
+
+-- C10: and is TOLD so, rather than shown an empty vault. An unprovisioned
+-- principal seeing zero rows with no explanation reads as "the system is empty",
+-- which is the ambiguity sql/32 exists to refuse everywhere else.
+INSERT INTO t VALUES ('C','c10_ungranted_principal_is_degraded_not_silent',
+  (SELECT (session_boot('55555555-5555-5555-5555-555555555555')->'degraded_reasons')
+            @> '["capability_scopes=none"]'::jsonb
+      AND (session_boot('55555555-5555-5555-5555-555555555555')->'scopes'->>'count')::int = 0),
+  'capability_scopes=none present and scope count is 0');
+
+-- C11: the inverse, so C9 is not passing because boot returns nothing to
+-- anyone. P1 holds the identical row shape AND the grant, and does see it.
+-- C9 and C11 differ by exactly one capability_grants row.
+INSERT INTO t VALUES ('C','c11_same_shape_with_grant_is_visible',
+  (SELECT session_boot('11111111-1111-1111-1111-111111111111')::text
+          LIKE '%CANARY-P1-OWN-PRIVATE-MEMORY%'
+      AND (session_boot('11111111-1111-1111-1111-111111111111')
+           ->'scopes'->>'count')::int > 0),
+  'P1: same fixture shape, plus a grant, is visible');
+
 -- C6: an AGENT principal can boot. Agents are the primary caller; a boot surface
 -- that only humans could call would be useless in practice.
 INSERT INTO t VALUES ('C','c6_agent_principal_can_boot',
@@ -282,7 +364,7 @@ INSERT INTO t VALUES ('C','c7_envelope_has_declared_shape',
   (SELECT session_boot('11111111-1111-1111-1111-111111111111') ?& ARRAY[
      'boot_schema_version','principal_id','principal_kind','booted_at',
      'hot_topics','deadlines','coordination','instruction_integrity',
-     'contract','health','degraded','degraded_reasons']),
+     'contract','health','degraded','degraded_reasons','scopes']),
   'all declared top-level keys present');
 
 -- C8: every content block carries an explicit coverage state. This is the whole
