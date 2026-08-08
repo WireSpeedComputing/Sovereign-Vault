@@ -159,6 +159,63 @@ else
   echo "  none"
 fi
 
+# ── BODY COVERAGE: is the SQL stored anywhere at all? ─────────────────────
+# The checks above compare applied migrations to PUBLIC repo files by MIGRATION:
+# header. They say nothing about whether the migration BODY exists outside the
+# hosted database. With 85 applied migrations and zero SQL in the private repo,
+# every check above reported clean -- the checker was blind to the single
+# largest structural risk in the project. That is the shape of failure this repo
+# has now hit seven times: a check reporting success without checking.
+#
+# NOT baseline-filtered, deliberately. The baseline exists because the historical
+# mapping from migrations to public repo files was never recorded. Body coverage
+# has no such excuse: a migration from July is exactly as unrecoverable as one
+# from today if its SQL exists only in a hosted database.
+#
+# If body coverage CANNOT be established, that is a FAILURE, not a skip. A skip
+# here would restore precisely the blindness this section was added to remove.
+# No default path. The location of the private migrations repository is
+# deployment data and does not belong in a public repo -- the same reason the
+# secret sweep itself lives outside this repository. Set BODIES_REPO in your
+# environment. Unset means "cannot verify", which is a failure below, not a skip.
+BODIES_REPO="${BODIES_REPO:-}"
+echo "== migration bodies stored outside the hosted database =="
+if [ -z "$BODIES_REPO" ]; then
+  echo "  CANNOT VERIFY: BODIES_REPO is not set"
+  echo "  ^^ This is a FAILURE, not a skip. Point BODIES_REPO at the private"
+  echo "     migrations repository. A drift check that cannot see whether the"
+  echo "     SQL exists anywhere is not a drift check."
+  DRIFT=1
+elif [ ! -d "$BODIES_REPO" ]; then
+  echo "  CANNOT VERIFY: no bodies repo at the configured BODIES_REPO path"
+  echo "  ^^ This is a FAILURE, not a skip. Set BODIES_REPO to the private"
+  echo "     migrations repository. A drift check that cannot see whether the"
+  echo "     SQL exists anywhere is not a drift check."
+  DRIFT=1
+elif [ ! -f "$BODIES_REPO/MANIFEST.tsv" ]; then
+  echo "  CANNOT VERIFY: $BODIES_REPO exists but has no MANIFEST.tsv"
+  echo "  ^^ FAILURE. Run extract-migrations.sh. Zero bodies stored is the"
+  echo "     condition this check exists to detect, and it is the current state."
+  DRIFT=1
+else
+  MISSING_BODIES=0
+  while IFS="$(printf '\t')" read -r _v mname; do
+    [ -z "$mname" ] && continue
+    if ! awk -F"$(printf '\t')" -v n="$mname" '$3==n{found=1} END{exit !found}' \
+         "$BODIES_REPO/MANIFEST.tsv" 2>/dev/null; then
+      echo "  NO BODY STORED: $mname"
+      MISSING_BODIES=$((MISSING_BODIES+1))
+    fi
+  done < "$APPLIED_FILE"
+  if [ "$MISSING_BODIES" -ne 0 ]; then
+    echo "  ^^ $MISSING_BODIES applied migration(s) exist only inside the hosted"
+    echo "     database. If that project is lost, so is the ability to rebuild it."
+    DRIFT=1
+  else
+    echo "  none -- every applied migration has a stored body"
+  fi
+fi
+
 echo "== repo files below the baseline (historical, mapping never recorded) =="
 if [ -s "$TMP/historical_files" ]; then
   echo "  $(wc -l < "$TMP/historical_files" | tr -d ' ') files, sql/00 through sql/$(printf '%02d' "$BASELINE_REPO_FILE") -- out of scope, see $(basename "$BASELINE_FILE")"
