@@ -24,6 +24,17 @@ INSERT INTO principals (id,kind,display_name,email) VALUES
  ('11111111-1111-1111-1111-111111111111','human','H1','h1@example.com'),
  ('22222222-2222-2222-2222-222222222222','human','H2','h2@example.com');
 
+-- Since sql/36 (migration 43) retrieve_context() is scope-gated, and these rows
+-- carry no workstream, so they map to workstream:unclassified. Without the scope
+-- declared and granted every assertion below reads not_evaluated -- correctly,
+-- and for a reason unrelated to topology.
+INSERT INTO scope_registry (scope, kind, identifier, description)
+VALUES ('workstream:unclassified','workstream','unclassified','Reserved scope for rows with no workstream')
+ON CONFLICT (scope) DO NOTHING;
+INSERT INTO capability_grants (principal_id, resource_scope, permissions, granted_by)
+SELECT p.id,'workstream:unclassified','{read}'::capability_permission[], p.id
+FROM principals p WHERE p.kind='human';
+
 -- one visible, matchable memory
 DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)

@@ -16,6 +16,18 @@ INSERT INTO principals (id,kind,display_name,email) VALUES
  ('11111111-1111-1111-1111-111111111111','human','H1','h1@example.com'),
  ('22222222-2222-2222-2222-222222222222','human','H2','h2@example.com');
 
+-- Since sql/36 (migration 43), retrieve_context() requires the principal to hold
+-- read on the row's workstream scope. These fixtures predate that gate and
+-- created rows with no workstream, which map to workstream:unclassified. Without
+-- the scope declared and granted, every retrieval assertion below returns zero --
+-- correctly, and for a reason that has nothing to do with what they test.
+INSERT INTO scope_registry (scope, kind, identifier, description)
+VALUES ('workstream:unclassified','workstream','unclassified','Reserved scope for rows with no workstream')
+ON CONFLICT (scope) DO NOTHING;
+INSERT INTO capability_grants (principal_id, resource_scope, permissions, granted_by)
+SELECT p.id,'workstream:unclassified','{read}'::capability_permission[], p.id
+FROM principals p WHERE p.kind='human';
+
 -- ── 1. The regression, end to end: drift is created, detected, and repaired.
 DO $c$ DECLARE v uuid; m_before int; m_after int; drift_before int; drift_after int; r record;
 BEGIN

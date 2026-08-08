@@ -1,6 +1,11 @@
--- PENDING OWNER APPROVAL — NOT APPLIED
+-- APPLIED as deployment migration 43 (2026-08-07)
 --
--- WO-08 Task 2 / our issue #11: RLS policy wiring.
+-- MIGRATION: 43_rls_policies_scope_narrows_visibility
+--
+-- APPLIED 2026-08-07 as migration 43. Capability grants were issued in the same
+-- session -- see STATUS.md. Grants are deployment data and are not in this repo.
+--
+-- WO-08 Task 2 / our issue #11: RLS policy wiring. LIVE.
 --
 -- ############################################################
 -- APPLY ORDER. This file assumes, in order:
@@ -120,6 +125,23 @@ grant execute on function public.row_scope(text) to authenticated;
 -- functions, which is the existing model; adding INSERT/UPDATE policies now
 -- would create a second write path alongside promote/supersede/reject and
 -- undo sql/26. Deliberate omission, not an oversight.
+
+-- ── DECLARE THE TWO NEW EXPOSURES ─────────────────────────────────────────
+-- Both grants above are deliberate API surface, and perimeter_assert() (sql/28)
+-- correctly flags any EXECUTE granted to `authenticated`. Declaring them keeps
+-- the checker at zero findings so a REAL exposure still stands out -- the whole
+-- point of sql/28 was that a checker returning noise gets ignored.
+--
+-- Caught by the replay harness failing verification immediately after this file
+-- landed, which is the check doing its job rather than a nuisance.
+insert into perimeter_exception (object_kind, object_identity, grantee, reason) values
+ ('function',
+  'public.can_read_row_as_request(p_owner uuid, p_visibility visibility_level, p_workstream text)',
+  'authenticated',
+  'The RLS predicate itself. Every SELECT policy on memories, wiki_pages and retrieval_units calls it, so authenticated must hold EXECUTE or the policies cannot evaluate. SECURITY DEFINER, so it adds no privilege beyond the decision it returns, and it resolves identity from verified JWT claims rather than from any caller-supplied argument.'),
+ ('function','public.row_scope(p_workstream text)','authenticated',
+  'Pure mapping from a workstream to its capability scope string. No data access, IMMUTABLE, and it is called inside the predicate above. Exposed only so the predicate can be evaluated in a policy context.')
+on conflict do nothing;
 
 drop policy if exists memories_read on public.memories;
 create policy memories_read on public.memories

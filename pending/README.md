@@ -10,12 +10,16 @@ Nothing in this directory has been applied to any deployment.
 
 | File | Upstream | State |
 |---|---|---|
-| `B_retrieval_topology_ISSUE72.sql` | #72 | **Complete, replay-tested.** Part 1 (table + seed) dry-run tested; Part 2 (the `retrieve_context` envelope) built and tested 2026-08-07, 24 assertions in `B_retrieval_topology_TEST.sql`. ⚠ Public signature change — new `retrieval_status` value. |
-| `E_rls_policies.sql` | our #11 | **Complete, replay-tested.** RLS policies + the shared access predicate. 17 assertions in `E_rls_policies_TEST.sh`, plus a mutation control. Apply AFTER `sql/30` and `B_…ISSUE72.sql` — see the file header. |
 | `C_retrieval_projection_refresh.sql` | — | **Complete, untested against a deployment.** Incremental per-row maintenance of the retrieval projection. Replay-tested only. |
 | `D_scope_hierarchy.sql` | #45 | **Complete, replay-tested.** Declared containment for scopes — the separate change the prior identity review required. 14-case test matrix in `D_scope_hierarchy_TEST.sql`, all passing. Widens authority: read the review note in the header before applying. |
 
 ### Graduated
+
+`B_retrieval_topology_ISSUE72.sql` and `E_rls_policies.sql` were approved and
+applied 2026-08-07 as deployment migrations 42 and 43. They now live at
+`sql/35_retrieval_topology.sql` and `sql/36_rls_policies.sql`, with their tests
+at `tests/35_*` and `tests/36_*`. `sql/30_scope_bound_authority.sql` went out as
+migration 41 in the same operation.
 
 `A_wiki_supersession_ISSUE71.sql` was approved and applied as deployment
 migration 37 on 2026-08-07. It now lives at `sql/24_wiki_supersession.sql`.

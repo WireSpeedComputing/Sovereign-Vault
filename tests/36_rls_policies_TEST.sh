@@ -46,11 +46,10 @@ for f in $(ls "$REPO"/sql/*.sql | sort); do
   psql -d "$DB" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null 2>&1 \
     || { echo "FAILED applying $(basename "$f")"; exit 1; }
 done
-for f in "$REPO/pending/B_retrieval_topology_ISSUE72.sql" "$REPO/pending/E_rls_policies.sql"; do
-  psql -d "$DB" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null 2>/tmp/e_rls_apply.err \
-    || { echo "FAILED applying $(basename "$f")"; cat /tmp/e_rls_apply.err; exit 1; }
-done
-echo "  schema + pending/B + pending/E applied"
+# sql/35 (topology) and sql/36 (policies) are now part of sql/ and were applied
+# by the loop above -- they graduated out of pending/ when migrations 42 and 43
+# went out. This block used to apply them separately and broke on the move.
+echo "  schema applied (includes sql/35 topology + sql/36 policies)"
 
 # authenticator is a LOGIN role, exactly as PostgREST connects.
 psql -d "$DB" -q -c "

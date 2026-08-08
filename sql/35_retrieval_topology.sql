@@ -1,4 +1,8 @@
--- PENDING OWNER APPROVAL — DO NOT APPLY
+-- APPLIED as deployment migration 42 (2026-08-07)
+--
+-- MIGRATION: 42_retrieval_topology_issue72
+--
+-- APPLIED 2026-08-07 as migration 42, immediately before migration 43.
 --
 -- Migration B for upstream issue #72: fail closed on single-store misses and
 -- expose topology. Placed in pending/ for the same reason as Migration A:

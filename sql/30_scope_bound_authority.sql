@@ -1,7 +1,13 @@
 -- 30_scope_bound_authority.sql
 --
+-- MIGRATION: 41_scope_bound_authority_and_seed
+--
+-- APPLIED 2026-08-07 as migration 41. The seed was moved BEFORE the FK at apply
+-- time: capability_grants held a REVOKED grant on workstream:tech, and a foreign
+-- key does not care about revocation state. Applying this file as written failed
+-- on a clean reproduction. Scopes were derived from the data, not from a list.
+--
 -- ADOPT: upstream sovereign-memory-core #45 — scope-bound authority.
--- NOT YET APPLIED to any deployment.
 --
 -- Designed AGAINST the deployed vault_auth layer (sql/23) and modifies none of
 -- it. vault_auth.request_has_capability() resolves identity and then delegates
@@ -10,14 +16,15 @@
 -- in vault_auth, and neither has to know the other's internals.
 --
 -- ══════════════════════════════════════════════════════════════════════════
--- FINDING FIRST: THE CAPABILITY MODEL IS NOT WIRED TO ANYTHING
+-- FINDING (RESOLVED 2026-08-07): THE CAPABILITY MODEL WAS NOT WIRED TO ANYTHING
 -- ══════════════════════════════════════════════════════════════════════════
 -- Nothing in this repo calls has_capability() or request_has_capability().
 -- Not one RLS policy, not one function, not one view. Grepped across all of
 -- sql/: the only occurrences outside the definition sites are a comment and a
 -- perimeter_exception reason string.
 --
--- So the authority model is currently decorative. It is a well-built lock with
+-- As written, the authority model was decorative. sql/36 wired it.
+-- Historical text follows, kept because the reasoning still explains the design. It is a well-built lock with
 -- no door in the frame. Every property below -- scope validation, registry,
 -- isolation -- is real and testable at the capability layer, and none of it
 -- constrains a single read or write of knowledge today, because no read or
@@ -104,8 +111,10 @@ revoke execute on function scope_parse_kind(text) from anon, authenticated, publ
 revoke execute on function scope_parse_identifier(text) from anon, authenticated, public;
 
 -- ── Bind grants to declared scopes ─────────────────────────────────────────
--- Safe to add HERE: the deployment has zero capability grants, verified before
--- writing this. On a deployment that had grants, this FK needs every existing
+-- NOTE, CORRECTED AT APPLY TIME: the deployment did NOT have zero grants. It
+-- held one REVOKED grant on workstream:tech, and a foreign key ignores
+-- revocation state, so this constraint failed until the seed preceded it.
+-- Verify with a preflight, not with a query filtered to revoked_at IS NULL. On a deployment that had grants, this FK needs every existing
 -- scope registered first, and that backfill is the migration -- not this
 -- constraint.
 --
