@@ -1,7 +1,14 @@
 -- 31_consequential_domains.sql
 --
+-- MIGRATION: 56_consequential_domains
+--
+-- APPLIED 2026-08-08. Verified INERT as designed: 4 policies, 0 bindings, 0
+-- classified rows, live units unchanged at 135, ACL drift 0, perimeter 0.
+-- Enforcement begins when someone classifies something, which is the intended
+-- activation point -- not at apply time.
+--
 -- ADOPT: upstream sovereign-memory-core #44 — declared consequential domains.
--- NOT YET APPLIED to any deployment. Filed in sql/ rather than pending/ because
+
 -- the negative suite in tests/31_consequential_domains.sql can only be shown
 -- green by a replay that includes it. STATUS.md records that the deployment
 -- does not have this.

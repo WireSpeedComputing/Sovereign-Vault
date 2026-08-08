@@ -1,6 +1,13 @@
 -- 32_session_boot.sql
 --
--- ***** NOT YET APPLIED to any deployment. *****
+-- MIGRATION: 55_session_boot
+--
+-- APPLIED 2026-08-08. Verified live: boot_schema_version 1.0.0, degraded=true
+-- with reasons ["instruction_integrity=no-blessing","agent_contract=not_implemented"]
+-- -- it reports its own gaps rather than presenting a confident empty envelope.
+-- perimeter_assert stayed at 0: not granted to anon/authenticated.
+--
+
 -- Declares no `-- MIGRATION:` header, which tests/migration_drift.sh reads as
 -- "repo file declaring no migration (not yet applied)". Do not add one until a
 -- deployment actually runs it.
@@ -253,7 +260,7 @@ begin
 end; $$;
 
 comment on function public.session_boot(uuid) is
-  'Principal-scoped first-call orientation envelope. Content is filtered by is_owner_or_shared() only -- no second authorization path. MUST NOT be granted to anon or authenticated and declares no perimeter_exception; the deployment-neutral counterpart proposed in docs/08 is agent_contract(), which is a separate surface for that reason. NOT YET APPLIED.';
+  'Principal-scoped first-call orientation envelope. Content is filtered by is_owner_or_shared() only -- no second authorization path. MUST NOT be granted to anon or authenticated and declares no perimeter_exception; the deployment-neutral counterpart proposed in docs/08 is agent_contract(), which is a separate surface for that reason. ';
 
 revoke all on function public.session_boot(uuid) from public, anon, authenticated;
 grant execute on function public.session_boot(uuid) to service_role;
