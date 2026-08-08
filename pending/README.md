@@ -10,10 +10,12 @@ Nothing in this directory has been applied to any deployment.
 
 | File | Upstream | State |
 |---|---|---|
-| `C_retrieval_projection_refresh.sql` | — | **Complete, untested against a deployment.** Incremental per-row maintenance of the retrieval projection. Replay-tested only. |
-| `D_scope_hierarchy.sql` | #45 | **Complete, replay-tested.** Declared containment for scopes — the separate change the prior identity review required. 14-case test matrix in `D_scope_hierarchy_TEST.sql`, all passing. Widens authority: read the review note in the header before applying. |
+| `D_scope_hierarchy.sql` | #45 | **HELD BY THE OWNER — do not apply.** Widens authority; everything applied so far narrows it. |
 
 ### Graduated
+
+`C_retrieval_projection_refresh.sql` was applied 2026-08-08 as migration 54 and
+now lives at `sql/41_incremental_retrieval_projection.sql`.
 
 `B_retrieval_topology_ISSUE72.sql` and `E_rls_policies.sql` were approved and
 applied 2026-08-07 as deployment migrations 42 and 43. They now live at

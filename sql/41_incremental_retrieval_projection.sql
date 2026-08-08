@@ -1,4 +1,11 @@
--- PENDING OWNER APPROVAL — NOT APPLIED
+-- APPLIED as deployment migration 54 (2026-08-08)
+--
+-- MIGRATION: 54_incremental_retrieval_projection
+--
+-- Verified live after applying: a proposed row is NOT projected; promotion
+-- projects it with no manual refresh; an operational write (hot_touched,
+-- embed_attempts) does NOT re-project; delete invalidates the unit; live count
+-- returned to 135 and ACL drift stayed 0.
 --
 -- Incremental maintenance of the retrieval projection.
 --
