@@ -197,18 +197,16 @@ SELECT 'C','c1_scope_authority_report_admits_nothing_is_enforced',
 FROM scope_authority_report();
 
 INSERT INTO t
-SELECT 'C','c2_a_granted_scope_still_constrains_no_reads',
-  -- Alpha holds read on workstream:alpha and nothing on workstream:beta. If
-  -- retrieval were scope-bound, a beta-workstream memory would be unreachable
-  -- to them. It is not: retrieve_context filters on owner/visibility only.
+SELECT 'C','c2_scope_now_constrains_reads',
+  -- CLOSED by sql/36 (migration 43). This assertion was written the other way
+  -- round -- asserting beta knowledge WAS readable by an alpha-only principal --
+  -- and it went red the moment capabilities were wired, which is what a
+  -- gap-assertion should do rather than quietly agreeing with the new code.
   (retrieve_context('11111111-1111-1111-1111-111111111111','zzbeta canary')
-     ->>'units_matched')::int >= 1,
-  'beta-scoped knowledge is readable by an alpha-only principal';
+     ->>'units_visible')::int = 0,
+  'an alpha-only principal can no longer read beta-scoped knowledge';
 
-
--- fixture for c2: a shared memory tagged to the beta workstream
--- (created after the assertions above are inserted is too late, so it is here
--- and c2 is re-evaluated below)
+-- fixture for c2: a shared memory in the beta workstream
 DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility, workstream)
   VALUES ('zzbeta canary fact','manual','human_direct','proposed',
@@ -216,11 +214,10 @@ DO $c$ DECLARE v uuid; BEGIN
   PERFORM promote_memory(v,'22222222-2222-2222-2222-222222222222');
   PERFORM refresh_retrieval_units();
   UPDATE t SET pass = (retrieve_context('11111111-1111-1111-1111-111111111111','zzbeta canary')
-                         ->>'units_matched')::int >= 1
-   WHERE test = 'c2_a_granted_scope_still_constrains_no_reads';
+                         ->>'units_visible')::int = 0
+   WHERE test = 'c2_scope_now_constrains_reads';
 EXCEPTION WHEN others THEN
-  UPDATE t SET pass=false, detail=SQLERRM
-   WHERE test='c2_a_granted_scope_still_constrains_no_reads'; END $c$;
+  UPDATE t SET pass=false, detail=SQLERRM WHERE test='c2_scope_now_constrains_reads'; END $c$;
 
 
 SELECT section, test, pass, left(detail,64) AS detail FROM t ORDER BY section, test;
@@ -233,8 +230,8 @@ SELECT 'B_registry_fails_loudly', bool_and(coalesce(pass,false)),
        count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' failed'
 FROM t WHERE section='B'
 UNION ALL
-SELECT 'C_gap_still_open_expected_true', bool_and(coalesce(pass,false)),
-       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' changed -- capabilities may now be wired'
+SELECT 'C_capabilities_now_enforced', bool_and(coalesce(pass,false)),
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' failed'
 FROM t WHERE section='C';
 
 -- ── GUARD: an assertion that evaluated to NULL is NOT a pass ───────────────

@@ -22,6 +22,18 @@ INSERT INTO principals (id,kind,display_name,agent_label) VALUES
 -- this file previously did exactly that, and updating it is part of the fix
 -- rather than a workaround for it. The path under test starts from a genuinely
 -- promoted row, which is now the only kind there is.
+-- Since sql/36 (migration 43), retrieve_context() requires the principal to hold
+-- read on the row's workstream scope. These fixtures predate that gate and
+-- created rows with no workstream, which map to workstream:unclassified. Without
+-- the scope declared and granted, every retrieval assertion below returns zero --
+-- correctly, and for a reason that has nothing to do with what they test.
+INSERT INTO scope_registry (scope, kind, identifier, description)
+VALUES ('workstream:unclassified','workstream','unclassified','Reserved scope for rows with no workstream')
+ON CONFLICT (scope) DO NOTHING;
+INSERT INTO capability_grants (principal_id, resource_scope, permissions, granted_by)
+SELECT p.id,'workstream:unclassified','{read}'::capability_permission[], p.id
+FROM principals p WHERE p.kind='human';
+
 INSERT INTO memories (id,content,source_kind,provenance_basis,status,owner,visibility)
 VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','original fact','manual','human_direct',
         'proposed','11111111-1111-1111-1111-111111111111','shared');
@@ -76,9 +88,15 @@ SELECT 'empty_query_not_evaluated' AS test,
      ->>'retrieval_status') = 'not_evaluated' AS pass;
 
 -- a nonsense query IS evaluated, with zero matches: a different outcome
+-- retrieval_status gained a third value in migration 42: with advertised stores
+-- this runtime cannot query, an evaluated search reports
+-- 'evaluated_partial_coverage'. This assertion previously demanded exactly
+-- 'evaluated' and broke on apply -- which is the #70 signature-change failure
+-- happening to a real caller, in our own suite. Asserted as "was evaluated at
+-- all" rather than pinned to one spelling.
 SELECT 'nonsense_query_evaluated' AS test,
   (retrieve_context('11111111-1111-1111-1111-111111111111','zzqq nonexistent')
-     ->>'retrieval_status') = 'evaluated' AS pass;
+     ->>'retrieval_status') LIKE 'evaluated%' AS pass;
 
 ROLLBACK;
 
