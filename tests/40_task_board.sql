@@ -21,6 +21,41 @@ INSERT INTO principals (id,kind,display_name,email) VALUES
 INSERT INTO principals (id,kind,display_name,agent_label) VALUES
  ('33333333-3333-3333-3333-333333333333','agent','A1','A1');
 
+-- ── CAPABILITY GRANTS, ADDED WITH sql/45 ──────────────────────────────────
+-- task_board() used to filter on is_owner_or_shared() alone. sql/45 composes
+-- capability scope into it, so that the definer door and the tasks_read policy
+-- answer the same question -- without that, the two diverge for the same
+-- principal, which is migration 49's defect on a new table.
+--
+-- The consequence for THIS suite is that a principal holding no grant now sees
+-- an empty board, and the assertions below that read a row out of task_board()
+-- returned NULL rather than false. NULL is not a failure to bool_and(), which is
+-- how three inert assertions read as passes until GUARD_no_null_assertions
+-- caught them. So the grants are declared here rather than the assertions
+-- loosened.
+--
+-- Every task below carries workstream 'suppliers' or NULL, and NULL maps to the
+-- reserved workstream:unclassified scope (sql/36 row_scope()).
+--
+-- H2 is granted unclassified DELIBERATELY. Section C asserts H2 cannot see H1's
+-- private task; with no grant at all that assertion would pass because H2 can
+-- see nothing whatsoever, which proves nothing about visibility. Holding the
+-- scope makes the denial attributable to the owner/visibility half of the rule,
+-- which is what C is testing.
+INSERT INTO scope_registry (scope,kind,identifier,description,declared_by) VALUES
+ ('workstream:suppliers','workstream','suppliers','Supplier workstream',
+  '11111111-1111-1111-1111-111111111111'),
+ ('workstream:unclassified','workstream','unclassified',
+  'Reserved scope for rows with no workstream','11111111-1111-1111-1111-111111111111');
+
+INSERT INTO capability_grants (principal_id,resource_scope,permissions,granted_by) VALUES
+ ('11111111-1111-1111-1111-111111111111','workstream:suppliers','{read}',
+  '11111111-1111-1111-1111-111111111111'),
+ ('11111111-1111-1111-1111-111111111111','workstream:unclassified','{read}',
+  '11111111-1111-1111-1111-111111111111'),
+ ('22222222-2222-2222-2222-222222222222','workstream:unclassified','{read}',
+  '11111111-1111-1111-1111-111111111111');
+
 -- a real, promoted memory to reference
 DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility, workstream)
