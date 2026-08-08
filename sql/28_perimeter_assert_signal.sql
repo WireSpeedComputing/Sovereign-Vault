@@ -1,6 +1,9 @@
 -- 28_perimeter_assert_signal.sql
 --
--- NOT YET APPLIED to any deployment.
+-- MIGRATION: 53_perimeter_exception_model
+--
+-- APPLIED 2026-08-08. perimeter_assert() on the deployment went from 242
+-- findings to 0, with 6 declared exceptions, all confirmed still_present.
 --
 -- Makes perimeter_assert() actionable. It currently is not.
 --
