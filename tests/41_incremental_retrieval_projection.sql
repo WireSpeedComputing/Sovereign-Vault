@@ -98,7 +98,13 @@ DO $c$ DECLARE v uuid; BEGIN
        ->>'units_matched')::int >= 1,
     'while shared, H2 can see it -- establishes the test is measuring something');
 
+  -- sql/47 locks visibility. This suite tests that the projection SYNC follows
+  -- a visibility change, so the change must reach the table by some route; the
+  -- window is used rather than reclassify_record() to keep the sync trigger the
+  -- only thing under test.
+  SET LOCAL app.reclassifying = 'on';
   UPDATE memories SET visibility='private' WHERE id=v;
+  SET LOCAL app.reclassifying = 'off';
 
   INSERT INTO t VALUES ('leak_closed_private_row_hidden_from_other',
     (retrieve_context('22222222-2222-2222-2222-222222222222','zzsecret bluefin')
@@ -166,7 +172,9 @@ DO $c$ DECLARE a uuid; b uuid; b_gen timestamptz; b_gen2 timestamptz; BEGIN
   PERFORM promote_memory(b,'11111111-1111-1111-1111-111111111111');
   SELECT generated_at INTO b_gen FROM retrieval_units WHERE source_id=b AND invalidated_at IS NULL;
 
+  SET LOCAL app.reclassifying = 'on';   -- see note above
   UPDATE memories SET visibility='private' WHERE id=a;
+  SET LOCAL app.reclassifying = 'off';
 
   SELECT generated_at INTO b_gen2 FROM retrieval_units WHERE source_id=b AND invalidated_at IS NULL;
   INSERT INTO t VALUES ('sync_is_scoped_to_one_row', b_gen = b_gen2,
