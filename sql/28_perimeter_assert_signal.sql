@@ -70,6 +70,31 @@ values (
 )
 on conflict do nothing;
 
+-- ── The three table grants that make the RLS policies operative ───────────
+-- RLS filters ROWS; a table-level privilege controls whether the role may touch
+-- the table at all. Without these three grants `authenticated` gets "permission
+-- denied for table memories" and no policy can ever serve a row -- the model
+-- would be installed and unreachable. Migration 48 (sql/37) issued them.
+--
+-- They are exposures and perimeter_assert is right to see them. What makes them
+-- safe is not the grant, it is that each table carries a deny-by-default SELECT
+-- policy resolving identity from verified JWT claims (sql/36). The grant opens
+-- the door; the policy decides who walks through. Declared together here so a
+-- future reader finds the pair rather than the half.
+--
+-- If any of these three tables ever loses its policy, this exception becomes a
+-- real hole. perimeter_exceptions_review() reports presence, not correctness --
+-- it cannot tell you the policy still exists. That check is pg_policies, and it
+-- is asserted on every replay by the harness's "tables missing RLS" line.
+insert into perimeter_exception (object_kind, object_identity, grantee, reason) values
+ ('table','public.memories','authenticated',
+  'Deliberate (migration 48, sql/37). Table-level SELECT is required for the memories_read policy in sql/36 to be reachable at all; without it authenticated is denied at the privilege layer and RLS never evaluates. Row access is decided by can_read_row_as_request(), which resolves the principal from verified JWT claims and requires read on the row workstream scope.'),
+ ('table','public.wiki_pages','authenticated',
+  'Deliberate (migration 48, sql/37). Same pairing as memories: the grant makes wiki_pages_read reachable, the policy decides the rows.'),
+ ('table','public.retrieval_units','authenticated',
+  'Deliberate (migration 48, sql/37). Same pairing. Note the retrieval_units policy resolves back to the SOURCE row rather than trusting the projection copies of owner/visibility/workstream, so this grant cannot serve a row the source would deny.')
+on conflict do nothing;
+
 create or replace function perimeter_assert()
 returns table (
   category text,
