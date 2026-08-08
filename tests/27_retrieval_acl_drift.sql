@@ -42,7 +42,14 @@ CREATE OR REPLACE FUNCTION _t27_drift(p_id uuid, p_vis visibility_level)
 RETURNS void LANGUAGE plpgsql AS $f$
 BEGIN
   ALTER TABLE memories DISABLE TRIGGER trg_sync_retrieval_memories_upd;
+  -- ACL drift is by definition a state no sanctioned path produces, so it is
+  -- simulated through the reclassify window rather than via reclassify_record().
+  -- Routing it through the sanctioned function would ALSO refresh the
+  -- projection, and this suite exists to test the repair of a projection that
+  -- did NOT get refreshed.
+  SET LOCAL app.reclassifying = 'on';
   UPDATE memories SET visibility=p_vis WHERE id=p_id;
+  SET LOCAL app.reclassifying = 'off';
   ALTER TABLE memories ENABLE TRIGGER trg_sync_retrieval_memories_upd;
 END $f$;
 
@@ -100,7 +107,9 @@ DO $c$ DECLARE v uuid; BEGIN
   PERFORM refresh_retrieval_units();
 
   ALTER TABLE memories DISABLE TRIGGER trg_sync_retrieval_memories_upd;
+  SET LOCAL app.reclassifying = 'on';   -- simulating drift; see note above
   UPDATE memories SET owner='22222222-2222-2222-2222-222222222222' WHERE id=v;
+  SET LOCAL app.reclassifying = 'off';
   ALTER TABLE memories ENABLE TRIGGER trg_sync_retrieval_memories_upd;
   PERFORM refresh_retrieval_units();
 

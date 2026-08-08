@@ -325,12 +325,44 @@ DO $c$ DECLARE v uuid; BEGIN
   VALUES ('lab value from report','agent','A1','imported_artifact','report:LAB-8891','proposed',
           '11111111-1111-1111-1111-111111111111','shared','clinical')
   RETURNING id INTO v;
+  -- The escape being tested is moving the row OUT of its bound workstream while
+  -- clearing the declared column -- the domain resolves from the binding, so
+  -- clearing the column alone is a no-op (asserted separately as c4b).
+  --
+  -- sql/47 locks workstream as an authorization input and its trigger sorts
+  -- before the domain trigger, so a plain UPDATE now fires the AUTHORIZATION
+  -- lock and this assertion -- which names the domain guard in its SQLERRM
+  -- match -- would go red against a row that was still correctly protected, by
+  -- the wrong guard. The window is opened so the DOMAIN guard is the one under
+  -- test. That is also the production path: reclassify_record() opens exactly
+  -- this window, so this asserts a record cannot be reclassified out of its
+  -- consequential domain even through the sanctioned route.
+  SET LOCAL app.reclassifying = 'on';
   UPDATE memories SET consequential_domain=NULL, workstream='misc' WHERE id=v;
+  SET LOCAL app.reclassifying = 'off';
   INSERT INTO t VALUES ('C','c4_classification_cannot_be_cleared',false,
     'domain cleared on an existing row');
 EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('C','c4_classification_cannot_be_cleared',
     SQLERRM LIKE '%not editable once set%', SQLERRM); END $c$;
+
+-- C4b: clearing the DECLARED column alone changes nothing, because the domain
+-- resolves from the workstream binding first. Found while fixing C4: narrowing
+-- C4's UPDATE to the single column made it "succeed", which reads as an escape
+-- and is not one. Asserted explicitly so the next person to narrow it sees why.
+DO $c$ DECLARE v uuid; d consequential_domain; BEGIN
+  INSERT INTO memories (content, source_kind, source_agent, provenance_basis, citation,
+                        status, owner, visibility, workstream)
+  VALUES ('second lab value','agent','A1','imported_artifact','report:LAB-8892','proposed',
+          '11111111-1111-1111-1111-111111111111','shared','clinical')
+  RETURNING id INTO v;
+  UPDATE memories SET consequential_domain=NULL WHERE id=v;
+  SELECT resolve_consequential_domain('memories', workstream, consequential_domain)
+    INTO d FROM memories WHERE id=v;
+  INSERT INTO t VALUES ('C','c4b_clearing_declared_column_alone_is_a_noop',
+    d IS NOT NULL, 'resolved domain after clearing the column: '||coalesce(d::text,'NULL'));
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('C','c4b_clearing_declared_column_alone_is_a_noop',false,SQLERRM); END $c$;
 
 -- C5: same ratchet, sideways. Reclassifying medical -> financial in place would
 -- swap the evidence rule under a row that was already accepted under the old one.
