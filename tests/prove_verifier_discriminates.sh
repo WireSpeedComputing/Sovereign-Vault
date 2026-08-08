@@ -177,7 +177,7 @@ run_case "H    the perimeter is opened to anon" CAUGHT "H" \
 run_case "J    a FUNCTION BODY is rewritten under the SAME NAME" CAUGHT "J" \
   "create or replace function is_owner_or_shared(p_row_owner uuid,
      p_row_visibility visibility_level, p_principal_id uuid)
-   returns boolean language sql stable set search_path to 'public' as \$fn\$
+   returns boolean language sql immutable set search_path to 'public' as \$fn\$
      select true;
    \$fn\$;"
 
@@ -285,19 +285,39 @@ echo "   definition check reports drift on that correct pair forever."
 
 # Rebuild is_owner_or_shared with identical semantics but condensed formatting
 # and different comments -- exactly the shape of the real sql/27 divergence.
-# The original body (sql/14) is, verbatim:
+#
+# UPDATED (WO-14 Phase 3d). This case previously reflowed the sql/14 body:
 #     SELECT p_row_owner = p_principal_id OR p_row_visibility = 'shared';
-# Below it is reflowed across lines, re-indented, and given entirely different
-# comments. Identical tokens, identical order, identical case.
+# sql/31_total_predicate_null_safety.sql replaced that with a coalesce-wrapped
+# TOTAL version, and this fixture was never updated. So the "equivalent" body it
+# offered stopped being equivalent -- it was missing the coalesce that makes the
+# predicate total -- and the canonicalizer correctly reported drift. The
+# equivalence case was asserting that the verifier must NOT flag a pair of
+# bodies that genuinely differ.
+#
+# It went unnoticed because the run failed earlier, at verification, and never
+# reached this step. A check that never executes cannot report that it is wrong.
+#
+# Same shape as four other fixtures found in this run: written correct, made
+# false by a change underneath it, still green because nothing re-ran it.
+#
+# Below is the CURRENT body, reflowed, re-indented and re-commented. Identical
+# tokens, identical order, identical case.
+#
+# Volatility matters too: the live function is IMMUTABLE and this fixture
+# declared STABLE, so the canonicalizer flagged drift a second time for a second
+# correct reason. It compares volatility, security mode, search_path and ACLs,
+# not just the body -- which is the property that makes it worth having, and the
+# property that makes a hand-written "equivalent" easy to get wrong.
 run_case "-    a body is reformatted and its comments rewritten" CLEAN "-" \
   "create or replace function is_owner_or_shared(p_row_owner uuid,
      p_row_visibility visibility_level, p_principal_id uuid)
    returns boolean language sql stable set search_path to 'public' as \$fn\$
        /* Commentary bearing no resemblance to the original, plus a block
           comment the original never had. */
-       SELECT p_row_owner = p_principal_id
+       SELECT coalesce(p_row_owner = p_principal_id, false)
               OR      -- reflowed and re-indented
-              p_row_visibility = 'shared';
+              coalesce(p_row_visibility = 'shared', false);
    \$fn\$;"
 
 run_case "-    sql/27 body, condensed exactly as the applied migration was" CLEAN "-" \

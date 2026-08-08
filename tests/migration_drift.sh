@@ -179,24 +179,25 @@ fi
 # secret sweep itself lives outside this repository. Set BODIES_REPO in your
 # environment. Unset means "cannot verify", which is a failure below, not a skip.
 BODIES_REPO="${BODIES_REPO:-}"
+BODY_DRIFT=0
 echo "== migration bodies stored outside the hosted database =="
 if [ -z "$BODIES_REPO" ]; then
   echo "  CANNOT VERIFY: BODIES_REPO is not set"
   echo "  ^^ This is a FAILURE, not a skip. Point BODIES_REPO at the private"
   echo "     migrations repository. A drift check that cannot see whether the"
   echo "     SQL exists anywhere is not a drift check."
-  DRIFT=1
+  BODY_DRIFT=1
 elif [ ! -d "$BODIES_REPO" ]; then
   echo "  CANNOT VERIFY: no bodies repo at the configured BODIES_REPO path"
   echo "  ^^ This is a FAILURE, not a skip. Set BODIES_REPO to the private"
   echo "     migrations repository. A drift check that cannot see whether the"
   echo "     SQL exists anywhere is not a drift check."
-  DRIFT=1
+  BODY_DRIFT=1
 elif [ ! -f "$BODIES_REPO/MANIFEST.tsv" ]; then
   echo "  CANNOT VERIFY: $BODIES_REPO exists but has no MANIFEST.tsv"
   echo "  ^^ FAILURE. Run extract-migrations.sh. Zero bodies stored is the"
   echo "     condition this check exists to detect, and it is the current state."
-  DRIFT=1
+  BODY_DRIFT=1
 else
   MISSING_BODIES=0
   while IFS="$(printf '\t')" read -r _v mname; do
@@ -210,7 +211,7 @@ else
   if [ "$MISSING_BODIES" -ne 0 ]; then
     echo "  ^^ $MISSING_BODIES applied migration(s) exist only inside the hosted"
     echo "     database. If that project is lost, so is the ability to rebuild it."
-    DRIFT=1
+    BODY_DRIFT=1
   else
     echo "  none -- every applied migration has a stored body"
   fi
@@ -233,10 +234,31 @@ else
   echo "  none"
 fi
 
+# ── EXIT CODES: two different questions, two different answers ────────────
+# 1  INVENTORY DRIFT -- an applied migration has no repo file, or vice versa.
+#    This is a property of THIS deployment against THIS repo.
+# 3  INVENTORY RECONCILES, BODY COVERAGE UNVERIFIED OR MISSING -- a property of
+#    the PROJECT, not of any one deployment.
+#
+# They were one exit code until WO-14 Phase 3d, and conflating them made
+# tests/verify_restore.sh report that a faithful restore had drifted, because
+# migration bodies are not stored anywhere. A proof that can never pass is one
+# people learn to ignore, which is how a gate dies quietly instead of loudly.
+#
+# 3 is NOT a pass. Callers that require full recoverability must treat any
+# non-zero as failure; callers verifying restore fidelity specifically can
+# distinguish 3 from 1. Neither is allowed to call it clean.
 echo
 if [ "$DRIFT" -ne 0 ]; then
   echo "MIGRATION DRIFT DETECTED."
+  [ "$BODY_DRIFT" -ne 0 ] && echo "ALSO: migration body coverage unverified or incomplete."
   exit 1
+fi
+if [ "$BODY_DRIFT" -ne 0 ]; then
+  echo "MIGRATION INVENTORY RECONCILES, BUT BODY COVERAGE IS UNVERIFIED OR INCOMPLETE."
+  echo "This is exit 3, not exit 0. The inventory question and the recoverability"
+  echo "question have different answers right now and both are reported."
+  exit 3
 fi
 echo "MIGRATION INVENTORY RECONCILES."
 echo "NOTE: inventory only. This does not compare definitions, grants, or"
