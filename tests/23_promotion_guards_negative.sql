@@ -310,18 +310,29 @@ DO $c$ DECLARE v uuid; BEGIN
 EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('C','c2_promoted_citation_swap_rejected',true,SQLERRM); END $c$;
 
--- C3: editing a PROPOSED candidate must remain unrestricted. This is the
--- distinction the docs previously did not draw: a candidate is work in progress,
--- a promoted record is a published claim.
+-- C3: ⚠ SEMANTICS CONFLICT, RECORDED NOT RESOLVED.
+-- This assertion was written against sql/26's model, where a proposed candidate
+-- is work in progress and freely editable. sql/39 (migration 51, APPLIED) locks
+-- `content` from the moment of INSERT, for every status, so that model is no
+-- longer true on the deployment. Verified directly against production: editing
+-- a proposed row's content is REJECTED; editing its tags is ACCEPTED.
+--
+-- The assertion now records applied behaviour, because a test asserting a
+-- counterfactual is worse than no test. It is NOT an endorsement: docs/04 still
+-- describes the candidate/promoted split, sql/26 is built on it, and which
+-- model wins is queued as an owner decision. Do not delete this comment when
+-- the decision lands -- change the assertion with it.
 DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
   VALUES ('draft claim','manual','human_direct','proposed',
           '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
   UPDATE memories SET content='revised draft claim' WHERE id=v;
-  INSERT INTO t VALUES ('C','c3_proposed_candidate_stays_editable',
-    (SELECT content='revised draft claim' FROM memories WHERE id=v),'candidate edited');
+  INSERT INTO t VALUES ('C','c3_candidate_content_locked_by_custody',false,
+    'content edit ACCEPTED -- custody locks (sql/39) are not in force, or were relaxed');
 EXCEPTION WHEN others THEN
-  INSERT INTO t VALUES ('C','c3_proposed_candidate_stays_editable',false,SQLERRM); END $c$;
+  INSERT INTO t VALUES ('C','c3_candidate_content_locked_by_custody',
+    SQLERRM LIKE '%custody fields are locked%',
+    'applied behaviour: '||SQLERRM); END $c$;
 
 -- C4: operational fields on a promoted row must stay mutable. Marking a
 -- deadline done is not a rewrite of what was promoted.
@@ -372,8 +383,13 @@ DO $c$ DECLARE v uuid; BEGIN
   VALUES ('tamper target','manual','human_direct','proposed',
           '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
   PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  -- Both guards must be off to simulate a real bypass. sql/39's custody lock
+  -- now also refuses this edit, and leaving it armed made the test fail on the
+  -- WRONG guard -- proving nothing about whether the audit detects tampering.
   ALTER TABLE memories DISABLE TRIGGER trg_promoted_record_immutable_memories;
+  ALTER TABLE memories DISABLE TRIGGER trg_custody_locks_memories;
   UPDATE memories SET content='tampered behind the guard' WHERE id=v;
+  ALTER TABLE memories ENABLE TRIGGER trg_custody_locks_memories;
   ALTER TABLE memories ENABLE TRIGGER trg_promoted_record_immutable_memories;
   INSERT INTO t VALUES ('C','c7_bypassed_edit_is_detected',
     (SELECT state='mismatch' FROM verify_promoted_integrity() WHERE record_id=v),

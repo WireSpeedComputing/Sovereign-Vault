@@ -1,3 +1,29 @@
+-- BLOCKED — NOT APPLICABLE AS WRITTEN. Moved out of sql/ 2026-08-08.
+--
+-- Built before migration 51 (sql/39, custody field locks) was applied. The two
+-- designs are incompatible, and this file's own test proves it:
+--
+--   b5_update_to_unregistered_rejected  expects rejection by THIS file's
+--     registry guard; gets rejection by the custody lock instead. It would pass
+--     for the wrong reason if the assertion did not check which guard fired.
+--   c6_reattribution_between_active_agents_allowed  expects reattribution
+--     between two active agents to SUCCEED. sql/39 locks source_agent from
+--     insert, so reattribution is impossible by design.
+--
+-- sql/39 is explicit that this is intended: "Agent attribution had to be
+-- resolved by MAPPING before this landed, because afterwards source_agent
+-- cannot be rewritten even to correct it."
+--
+-- So this is not a bug in either file. It is a design fork:
+--   custody-first (APPLIED): attribution is immutable, corrections append.
+--   registry-first (this file): attribution is correctable between registered,
+--     active agents.
+-- Both are defensible; they cannot both hold. Resolving it is an owner
+-- decision, queued in the exit report -- not something to settle by editing a
+-- test until it goes green.
+--
+-- Applying this as-is would install a guard whose own test fails.
+--
 -- 33_agent_registry_integrity.sql
 --
 -- ***** NOT YET APPLIED to any deployment. *****

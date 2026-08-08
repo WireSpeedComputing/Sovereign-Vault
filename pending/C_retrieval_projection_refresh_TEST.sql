@@ -19,6 +19,17 @@ INSERT INTO principals (id,kind,display_name,email) VALUES
  ('11111111-1111-1111-1111-111111111111','human','H1','h1@example.com'),
  ('22222222-2222-2222-2222-222222222222','human','H2','h2@example.com');
 
+-- Since sql/36 (migration 43) retrieve_context() is scope-gated. These rows
+-- carry no workstream and map to workstream:unclassified; without the scope
+-- declared and granted every retrieval assertion reads zero for a reason that
+-- has nothing to do with projection refresh.
+INSERT INTO scope_registry (scope, kind, identifier, description)
+VALUES ('workstream:unclassified','workstream','unclassified','Reserved scope for rows with no workstream')
+ON CONFLICT (scope) DO NOTHING;
+INSERT INTO capability_grants (principal_id, resource_scope, permissions, granted_by)
+SELECT p.id,'workstream:unclassified','{read}'::capability_permission[], p.id
+FROM principals p WHERE p.kind='human';
+
 -- ── 1. the reported bug: a promoted memory is retrievable without a manual refresh
 DO $c$ DECLARE v uuid; BEGIN
   INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
