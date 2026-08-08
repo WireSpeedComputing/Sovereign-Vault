@@ -102,10 +102,33 @@
 -- ══════════════════════════════════════════════════════════════════════════
 -- 1. Stop the default from re-granting it
 -- ══════════════════════════════════════════════════════════════════════════
-alter default privileges in schema public
-  revoke truncate on tables from service_role;
-alter default privileges in schema vault_auth
-  revoke truncate on tables from service_role;
+-- ── PORTABILITY: guarded, and the guard is the point ──────────────────────
+-- Every statement here names service_role. On a host without that role each one
+-- raises, and psql with ON_ERROR_STOP aborts the file -- which meant the FIXED
+-- perimeter_assert() at the bottom never got created, and the STALE fail-open
+-- version from sql/28 survived instead.
+--
+-- Measured, not reasoned: applying sql/ to a vanilla cluster with the sql/00
+-- role shim stripped (which is what restoring a platform dump looks like) left
+-- a perimeter_assert() that returns 0 rows having checked nothing, on exactly
+-- the hosts where an independent party would run it to check our work.
+--
+-- So the revokes are guarded and the function definition is unconditional. A
+-- host that has no service_role has nothing to revoke FROM -- skipping is
+-- correct there, and is not the same as skipping a check.
+do $portable$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    execute 'alter default privileges in schema public revoke truncate on tables from service_role';
+    execute 'revoke truncate on all tables in schema public from service_role';
+    if exists (select 1 from pg_namespace where nspname = 'vault_auth') then
+      execute 'alter default privileges in schema vault_auth revoke truncate on tables from service_role';
+      execute 'revoke truncate on all tables in schema vault_auth from service_role';
+    end if;
+  else
+    raise notice 'service_role absent on this host: nothing to revoke. The perimeter check below still installs and will report not_evaluated.';
+  end if;
+end $portable$;
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 2. Clean up the 32 that already carry it
@@ -114,8 +137,7 @@ alter default privileges in schema vault_auth
 -- works and writes a receipt. Revoking DELETE would break the sanctioned
 -- override path, which is a real capability with a real audit trail, in order
 -- to defend against a hole that revoking TRUNCATE already closes.
-revoke truncate on all tables in schema public from service_role;
-revoke truncate on all tables in schema vault_auth from service_role;
+-- (Both revokes are issued inside the guarded block above.)
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 3. perimeter_assert(): see the destructive table-level grants
