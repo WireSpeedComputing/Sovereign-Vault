@@ -1,5 +1,11 @@
 -- 34_hard_delete_guard.sql
 --
+-- MIGRATION: 52_hard_delete_guard
+--
+-- APPLIED 2026-08-08. Verified live: unarmed DELETE blocked, armed override
+-- succeeds and writes a receipt, row removed. Closes a hole demonstrated in
+-- the same session -- a plain DELETE on memories succeeded beforehand.
+--
 -- ***** NOT YET APPLIED to any deployment. *****
 -- Declares no `-- MIGRATION:` header on purpose; tests/migration_drift.sh reads
 -- that absence as "not yet applied".
