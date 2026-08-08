@@ -1,5 +1,7 @@
 -- 43_session_boot_scope_composition.sql
 --
+-- MIGRATION: 61_session_boot_scope_composition
+--
 -- WO-14 Phase 1a. Independently confirmed defect, then measured against
 -- production before and after.
 --

@@ -94,3 +94,70 @@ refuses `UPDATE` and `DELETE`). `verify_promoted_integrity()` compares every
 `unaudited` is the honest answer for every row promoted before `sql/26` was
 applied. It is reported as its own state rather than folded into `match`,
 because silence about a row must never read as a clean bill of health.
+
+---
+
+## Row-level locks do not survive a table-level operation
+
+**Every custody mechanism in this system is row-level, and the guarantees they
+provide end exactly where row operations end.** This section exists because that
+sentence was true for months and was written down nowhere, while the
+documentation above described immutability in terms that invited a stronger
+reading than the implementation supports.
+
+The four mechanisms, and their wiring:
+
+| mechanism | trigger timing | file |
+|---|---|---|
+| custody field locks | `BEFORE UPDATE ... FOR EACH ROW` | `sql/39` |
+| bounded status transitions | `BEFORE UPDATE ... FOR EACH ROW` | `sql/13` |
+| hard-delete guard, writes a receipt | `BEFORE DELETE ... FOR EACH ROW` | `sql/34` |
+| append-only audit tables | `BEFORE UPDATE OR DELETE ... FOR EACH ROW` | `sql/26`, `sql/34` |
+
+`TRUNCATE` is a statement-level operation. **No row-level trigger fires for it.**
+One `TRUNCATE` therefore defeats all four at once: it destroys every governed
+record, arms no override, writes no receipt, and leaves no row for any
+row-level check to inspect afterwards. `DROP TABLE` and
+`ALTER TABLE ... DISABLE TRIGGER` are DDL and are not constrained by any of them
+either.
+
+The sharpest form of the problem was that `hard_delete_audit` — the table whose
+entire purpose is to make destruction observable — was itself truncatable by the
+same privilege. Evidence destructible by the privilege it exists to observe is
+not evidence.
+
+### What is now true, and what is still not
+
+`TRUNCATE` has been revoked from `service_role` across `public` and `vault_auth`
+(migration 62), and the default privileges that were silently re-granting it on
+every `CREATE TABLE` have been altered so new tables do not inherit it.
+`perimeter_assert()` gained a `destructive_grant` category that reports
+`TRUNCATE` held by any non-owner role, so a re-introduction is visible rather
+than latent.
+
+**Still true, and not fixed by any of that:**
+
+- The table **owner** can always `TRUNCATE`, `DROP` and `ALTER`. Ownership is not
+  a grant and cannot be revoked from. Anyone holding the owner role holds the
+  ability to remove the entire substrate, and no row-level mechanism can observe
+  it.
+- A platform-owned default privilege entry, owned by a role we are not a member
+  of, still grants the full privilege set — including `TRUNCATE` — to the
+  network-facing roles for any table created *by that role* in `public`. Our
+  migrations do not create tables as that role, so no current table is affected.
+  We cannot alter that entry, and it is recorded here rather than in a runbook
+  because it is a standing property of the host, not a task.
+- Detection of a table-level destruction is not a database-level control at all.
+  It requires an independently held checkpoint that diverges afterwards — which
+  is what the export/restore package is for, and why an archive nobody has
+  restored from is not a control either.
+
+### The rule to carry
+
+**Immutability claims must name the operations they hold against.** "A promoted
+record cannot be altered" is false as written; "a promoted record cannot be
+altered or deleted by a row operation from a routine or service role" is true
+and is the claim the mechanisms support. Where this documentation makes an
+immutability claim, it should be read with that qualifier, and any conformance
+criterion phrased as "in-place updates fail" is satisfiable by a system whose
+records can be destroyed wholesale.
