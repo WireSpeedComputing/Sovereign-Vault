@@ -1,6 +1,7 @@
 -- 47_reclassify_transition.sql
 --
 -- MIGRATION: 63_reclassify_transition_and_authorization_input_locks
+-- MIGRATION: 65_reclassify_record_cast_owner_and_visibility
 --
 -- WO-14 Phase 2a and 2b. Ruling already made by the owner; this implements it.
 --
@@ -176,11 +177,23 @@ begin
         raise exception 'reclassify_record: owner % is not a principal', v_new;
       end if;
 
-      execute format('update %I set %I = $1, updated_at = now() where id = $2',
-                     p_relation, v_field)
-        using (case when v_field = 'owner' then v_new::uuid::text
-                    when v_field = 'visibility' then v_new::visibility_level::text
-                    else v_new end), p_record_id;
+      -- The cast belongs in the STATEMENT, not in the parameter. The first
+      -- version coerced every value to text before binding it, so `set owner =
+      -- $1` handed text to a uuid column and `set visibility = $1` handed text
+      -- to visibility_level -- both raised at runtime. Only the workstream
+      -- branch worked, because workstream is the one text column of the three.
+      --
+      -- It shipped as migration 63 and was caught by tests/52, the first test
+      -- that ever asked this function to change a visibility. tests/47 covered
+      -- every refusal and the workstream path, so two of the three fields this
+      -- function exists to govern had a positive path that had never once run.
+      -- A suite of denials plus one working case reads exactly like coverage.
+      execute format('update %I set %I = $1::%s, updated_at = now() where id = $2',
+                     p_relation, v_field,
+                     case v_field when 'owner'      then 'uuid'
+                                  when 'visibility' then 'visibility_level'
+                                  else 'text' end)
+        using v_new, p_record_id;
 
       insert into record_authorization_audit(
         record_relation, record_id, field, old_value, new_value,

@@ -142,6 +142,36 @@ exception when others then
   insert into t_result values (13,'content remains locked',true,SQLERRM);
 end $c$;
 
+-- ── 14-15: THE MISSING POSITIVE CONTROLS ──────────────────────────────────
+-- This suite originally proved every refusal and one successful workstream
+-- change. owner and visibility -- two of the three fields the function exists
+-- to govern -- had no successful path asserted anywhere, and both were broken:
+-- the dynamic UPDATE bound its value as text, so assigning to a uuid or an enum
+-- column raised. Shipped as migration 63 and found by tests/52.
+--
+-- A suite of denials plus one working case reads exactly like coverage.
+do $c$ declare n integer; begin
+  n := reclassify_record('memories', pg_temp.id('rec'), pg_temp.id('human'),
+        'suite: visibility change positive control',
+        '{"visibility":"private"}'::jsonb);
+  insert into t_result values (14,'a visibility change through the function succeeds',
+    n = 1 and (select visibility from memories where id = pg_temp.id('rec')) = 'private',
+    'applied='||n::text||' now='||coalesce((select visibility::text from memories where id=pg_temp.id('rec')),'NULL'));
+exception when others then
+  insert into t_result values (14,'a visibility change through the function succeeds',false,SQLERRM);
+end $c$;
+
+do $c$ declare n integer; begin
+  n := reclassify_record('memories', pg_temp.id('rec'), pg_temp.id('human'),
+        'suite: owner change positive control',
+        jsonb_build_object('owner', pg_temp.id('agent')::text));
+  insert into t_result values (15,'an owner change through the function succeeds',
+    n = 1 and (select owner from memories where id = pg_temp.id('rec')) = pg_temp.id('agent'),
+    'applied='||n::text);
+exception when others then
+  insert into t_result values (15,'an owner change through the function succeeds',false,SQLERRM);
+end $c$;
+
 insert into t_result
 select 99,'GUARD_no_null_assertions', coalesce(count(*)=0,false),
   count(*)::text||' assertion(s) evaluated to NULL'

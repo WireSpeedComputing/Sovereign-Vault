@@ -200,6 +200,118 @@ create trigger trg_statement_span
   before insert or update on statements
   for each row execute function enforce_statement_span();
 
+-- ══════════════════════════════════════════════════════════════════════════
+-- A3 — VISIBILITY INHERITANCE, ENFORCED. NOT equal-by-convention.
+-- ══════════════════════════════════════════════════════════════════════════
+-- A statement can never be more visible than its source. That was previously a
+-- sentence in the access-model comment at the bottom of this file and a column
+-- default of 'shared'. A default is not an inheritance rule; it is a guess that
+-- happens to be right while every source shares the same value.
+--
+-- WHY THIS MATTERS MORE THAN IT DID WHEN FIRST SPECIFIED. It is now confirmed
+-- that every row in the deployment carries visibility='shared', so the
+-- visibility dimension has never denied anything -- is_owner_or_shared()'s
+-- second disjunct is true for every pair that has ever existed. A statement
+-- layer built today therefore inherits a value that has never been exercised,
+-- and any test of that inheritance written against current data passes without
+-- testing anything at all.
+--
+-- So this is written to hold when that changes, and tests/52 exercises it with
+-- PRIVATE sources -- the branch production has never run.
+--
+-- WHY THE CONSTRAINT EXISTS AT ALL. Extraction increases exfiltration risk by
+-- construction. A claim buried in a 9,000-character record has friction: you
+-- must retrieve the record, find the passage, and understand the surrounding
+-- context. An atomic, quotable, individually addressable assertion has none of
+-- that. The statement layer takes the single most sensitive sentence in a
+-- private record and makes it a row you can SELECT by keyword. If visibility
+-- does not inherit exactly, extraction is a laundering step: private content
+-- enters, shared statements leave.
+--
+-- THREE MECHANISMS, because any one alone fails:
+--   1. write-time  -- a statement's owner/visibility/workstream are FORCED from
+--                     the source row; the caller cannot supply them.
+--   2. change-time -- when a source's authorization inputs change, dependent
+--                     statements follow in the same statement.
+--   3. read-time   -- statement_visible_to() resolves to the SOURCE row and
+--                     never trusts the stored copy.
+-- (1) alone drifts the moment a source is reclassified -- which is exactly the
+-- ACL-drift defect migration 39 exists to repair on retrieval_units, and this
+-- schema stores the same denormalised copies for the same reason. (3) alone
+-- leaves wrong data sitting in the table for anything that reads it directly.
+
+create or replace function enforce_statement_inherits_authorization()
+returns trigger language plpgsql security definer
+set search_path = public as $$
+declare v_src record;
+begin
+  select owner, visibility, workstream into v_src
+    from memories where id = new.derived_from;
+  if not found then
+    raise exception 'statement %: derived_from % is not a memory', new.id, new.derived_from;
+  end if;
+
+  -- FORCED, not validated. A check constraint would let a caller supply the
+  -- right value and be refused when they supply the wrong one; forcing means
+  -- there is no value to supply. The column becomes a cache of the source, and
+  -- a cache nobody can write is a cache that cannot disagree.
+  new.owner      := v_src.owner;
+  new.visibility := v_src.visibility;
+  new.workstream := v_src.workstream;
+  return new;
+end; $$;
+
+drop trigger if exists trg_statement_inherits_authorization on statements;
+create trigger trg_statement_inherits_authorization
+  before insert or update on statements
+  for each row execute function enforce_statement_inherits_authorization();
+
+-- Change-time. Fires on the SOURCE, so a reclassify_record() call that narrows
+-- a memory drags its statements with it inside the same statement -- there is no
+-- window in which a private record has shared statements.
+create or replace function propagate_authorization_to_statements()
+returns trigger language plpgsql security definer
+set search_path = public as $$
+begin
+  if new.owner      is distinct from old.owner
+     or new.visibility is distinct from old.visibility
+     or new.workstream is distinct from old.workstream then
+    update statements
+       set owner = new.owner, visibility = new.visibility, workstream = new.workstream
+     where derived_from = new.id
+       and (owner is distinct from new.owner
+            or visibility is distinct from new.visibility
+            or workstream is distinct from new.workstream);
+  end if;
+  return new;
+end; $$;
+
+drop trigger if exists trg_propagate_authorization_to_statements on memories;
+create trigger trg_propagate_authorization_to_statements
+  after update on memories
+  for each row execute function propagate_authorization_to_statements();
+
+-- Read-time. Resolves to the SOURCE row. Deliberately does NOT read
+-- statements.visibility, so a stale copy cannot widen anything even if both
+-- triggers above were dropped.
+create or replace function statement_visible_to(p_statement_id uuid, p_principal_id uuid)
+returns boolean language sql stable security definer
+set search_path = public as $$
+  select coalesce((
+    select public.can_read_row(m.owner, m.visibility, m.workstream, p_principal_id)
+    from statements s join memories m on m.id = s.derived_from
+    where s.id = p_statement_id
+      and s.retracted_at is null
+  ), false);
+$$;
+
+comment on function statement_visible_to(uuid, uuid) is
+  'Authorization for a statement, resolved from its SOURCE record rather than from the statement''s own copied columns. Returns false for an unknown or retracted statement -- an unresolvable statement is not a visible one. A statement can never be more visible than its source because this never asks the statement.';
+
+revoke execute on function enforce_statement_inherits_authorization() from anon, authenticated, public;
+revoke execute on function propagate_authorization_to_statements() from anon, authenticated, public;
+revoke execute on function statement_visible_to(uuid, uuid) from anon, authenticated, public;
+
 -- ── Evidence: many-to-many, with a quote hash ─────────────────────────────
 -- Upstream #11 asks for candidate source locators and quote hashes. This is
 -- that, built where it is load-bearing: a statement's support is a row with an
@@ -391,7 +503,11 @@ revoke execute on function enforce_statement_span() from anon, authenticated, pu
 
 -- ── Access model ──────────────────────────────────────────────────────────
 -- No policies here, same as the task board. Statements inherit owner/visibility
--- from their source and will reuse can_read_row_as_request() when policies are
--- written; inventing a parallel path for a projection would reproduce the ACL
--- divergence that migration 39 existed to fix. Until then: RLS enabled, no
--- policy, deny-all, service_role only.
+-- from their source -- ENFORCED, see the A3 section above, not asserted here --
+-- and will reuse can_read_row_as_request() when policies are written; inventing
+-- a parallel path for a projection would reproduce the ACL divergence that
+-- migration 39 existed to fix. Until then: RLS enabled, no policy, deny-all,
+-- service_role only.
+--
+-- This paragraph used to be the ONLY thing making the inheritance claim, next
+-- to a column defaulting to 'shared'. That is what A3 was written to correct.
