@@ -8,11 +8,11 @@
 --   sql/37_rls_authenticated_select_and_lifecycle.sql  (the lifecycle narrowing
 --                                                       and the table grants)
 --   sql/40_task_board.sql     (tasks, task_references, task_dependencies)
---   sql/43_session_boot_scope_composition.sql   (migration 61 -- composes the
+--   sql/45_session_boot_scope_composition.sql   (migration 61 -- composes the
 --       same can_read_row() rule into session_boot and the owner-scoped
 --       wrappers. Nothing here redefines it; this file is the RLS half of the
 --       same composition and must not drift from it.)
---   sql/44_truncate_revocation_and_table_level_perimeter.sql  (migration 62 --
+--   sql/46_truncate_revocation_and_table_level_perimeter.sql  (migration 62 --
 --       perimeter_assert() gained the destructive_grant category and TRUNCATE
 --       is revoked from service_role. The table grants below are SELECT only,
 --       so they are visible to the table_grant category and invisible to the

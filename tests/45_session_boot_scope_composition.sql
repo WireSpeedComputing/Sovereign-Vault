@@ -1,4 +1,4 @@
--- tests/43_session_boot_scope_composition.sql
+-- tests/45_session_boot_scope_composition.sql
 --
 -- Proves sql/43 composed capability scope into every read path session_boot
 -- assembles, AND that this suite fails when it has not been.
