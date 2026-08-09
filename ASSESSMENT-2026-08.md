@@ -468,3 +468,100 @@ discards the argument. See `docs/13`.
 
 Two of three are decisions rather than work.
 
+---
+
+# REVISED VERDICT — 2026-08-09, end of WO-15
+
+## Can real users be added? **Yes, once one decision is made — with two conditions.**
+
+This is the first time the answer has not been an unqualified no. What changed is
+that the two blockers that were about *not being able to prove anything* are
+closed, and what remains is a decision and a re-run.
+
+| # | Blocker | State |
+|---|---|---|
+| 1 | migration bodies exist only in hosted databases | **CLEARED** — 92 bodies extracted and pushed |
+| 2 | 4 applied migrations with no repo file | **CLEARED** |
+| 3 | restore verifier not proven able to fail | **CLEARED TODAY** |
+| 5 | compliance ruleset existed only as deployment data | **CLEARED TODAY** |
+| 4 | granting real users any scope | **the remaining decision — yours** |
+
+### Blocker 3 closed, and it found something on the way out
+
+The discrimination proof now passes: 22 of 22 corruptions caught on the intended
+check, both equivalence cases clean. `verify_restore` can be trusted green,
+which it could not be at any previous point in this project's history.
+
+Getting there surfaced a defect nothing else would have: **`ENABLE ALWAYS` did
+not survive a restore.** `pg_dump --disable-triggers` wraps the load in
+`ENABLE TRIGGER ALL`, and the plain form resets firing mode to origin — so the
+two audit guards hardened yesterday came back from a restore in the exact state
+migration 67 exists to prevent. Silently, because the triggers were present and
+enabled and only their firing mode changed. A name-equality check calls that
+clean; check J named both objects. Fixed as data: export records every
+always-mode trigger, restore re-asserts them.
+
+### Blocker 5 closed on the seam in the data
+
+19 rules, 4 carrying a regulatory authority. Those 4 ship in `sql/`; the other
+15 stay deployment data. `tests/20` — the suite that would have caught the
+disease-claim gap and could not run anywhere it mattered — now runs on every
+replay and passes 30 of 30 in a fresh cluster.
+
+## The two conditions
+
+**1. Re-run the extraction.** Migrations 65–69 were applied today, after the
+92-body extraction. The sovereignty proof reports this precisely and refuses to
+call itself complete: it exits 2 with RECOVERABILITY NOT ESTABLISHED and names
+the missing bodies. That is the gate working, not a defect — but it means the
+recoverability claim is *stale*, not *false*, and a re-run makes it true.
+
+**2. Grant the five unprovisioned principals their scopes.** Five of eight
+active principals hold zero read scopes. They correctly see nothing and are told
+why. Granting is deployment data and outside my authority by design.
+
+Neither is work. Both are one action each.
+
+## Current measured state
+
+| | |
+|---|---|
+| migrations applied | 69 |
+| perimeter findings | 0 |
+| TRUNCATE held by the service credential | 0 |
+| always-mode audit guards | 2 of 2 |
+| regulatory rules seeded in the repo | 4 |
+| `current` records unclassified | 8 (all genuinely cross-scope) |
+| active principals with zero scopes | 5 |
+| replay | CLEAN, all 24 suites scored |
+| sovereignty proof | A–K pass, 22/22 corruptions caught, exit 2 on stale bodies |
+
+## What I would still not call finished
+
+- **Statement extraction remains a six-record sample.** Full-corpus yield is
+  unknown. Not extended in this run; reported rather than rushed, because a
+  hurried extraction violates the one rule that makes the layer trustworthy.
+- **`agent_surface_alias` is empty on a fresh install.** Deployment data by
+  design, but an empty alias map resolves nothing — instance 5's exact shape.
+  Asserted in `tests/55` so it cannot be rediscovered by accident.
+- **Four tables carry `owner`/`visibility` columns live that no repo file
+  creates.** The drift checker compares migration inventories, not schema
+  content, and says so. Unreconciled.
+- **A statement can outlive a superseded source.** Asserted as a limit.
+- **`session_boot`'s coordination block** returns deployment-wide review counts
+  to a principal holding no scopes. Declared, not gated.
+
+## The thing worth carrying forward
+
+Ten instances now, and the last three were not found by the same method as the
+first seven. Instances 1–7 were found by accident. Instance eight was found by
+asking *which gates are unread*. Instance ten was found by **executing a
+falsification instruction that had been written down and never run**. Blocker
+5 and the `scope_registry` finding were found by asking *which controls exist in
+only one place* — and that question, asked mechanically against a fresh install,
+found two more in ten minutes.
+
+The pattern has stopped being "we keep making this mistake" and started being a
+question with a repeatable method attached. That is the difference between a
+list of incidents and a technique.
+
