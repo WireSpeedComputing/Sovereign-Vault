@@ -52,7 +52,7 @@ select 0, 'precondition: there is an audit row and a receipt to attack',
   'auth rows=' || (select count(*) from record_authorization_audit where record_id = pg_temp.id('rec'))::text
   || ' receipts=' || (select count(*) from hard_delete_audit)::text;
 
--- 1. POSITIVE CONTROL: replica mode really does disable ORIGIN triggers here.
+-- 1. POSITIVE CONTROL: replica mode really does disable origin-mode triggers.
 --    Without this, assertions 2 and 3 could pass simply because the SET had no
 --    effect in this environment, and the suite would certify a protection it
 --    never exercised.
