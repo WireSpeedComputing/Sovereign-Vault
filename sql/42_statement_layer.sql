@@ -465,18 +465,59 @@ $$;
 -- Symmetric relations read in both directions. Storage is canonical; reading is
 -- not, because a caller asking "what conflicts with X" should not have to know
 -- which side of a uuid comparison X landed on.
+-- A1. `locality` is DERIVED, never stored: two statements sharing a
+-- derived_from are intra-record, otherwise cross-record. A stored
+-- classification can drift from the thing it describes, and this project has
+-- been bitten by exactly that four times -- the retrieval_units ACL copies, the
+-- hot-index workstream copy, the statement authorization copies this file now
+-- forces, and a coverage report whose `enforced` column was hardcoded false
+-- while the policies enforced. Computed cannot drift.
+--
+-- The distinction is operational, not cosmetic:
+--   intra_record  two claims inside ONE record disagree. That is an AUTHORING
+--                 defect. The record is internally incoherent and no retrieval
+--                 strategy can rescue it, because whichever passage is returned
+--                 the reader gets a confident answer whose parts disagree. The
+--                 document path cannot surface this even in principle.
+--   cross_record  two records disagree. That is a KNOWLEDGE conflict. Both may
+--                 have been correct when written; one is now stale, or they
+--                 were derived from different premises.
+-- They need different handling -- one is fixed by correcting a record, the
+-- other by deciding which claim survives -- so a caller that cannot tell them
+-- apart cannot route either.
 create or replace function statement_conflicts(p_statement_id uuid)
 returns table (other_statement uuid, other_claim text, rationale text,
-               method text, confidence numeric, other_source uuid)
+               method text, confidence numeric, other_source uuid, locality text)
 language sql stable security definer set search_path = public as $$
   select case when r.from_statement = p_statement_id then r.to_statement else r.from_statement end,
-         o.claim, r.rationale, r.method, r.confidence, o.derived_from
+         o.claim, r.rationale, r.method, r.confidence, o.derived_from,
+         case when o.derived_from = self.derived_from then 'intra_record'
+              else 'cross_record' end
   from statement_relations r
+  join statements self on self.id = p_statement_id
   join statements o
     on o.id = case when r.from_statement = p_statement_id then r.to_statement else r.from_statement end
   where r.relation_kind = 'contradicts'
     and r.retracted_at is null
     and (r.from_statement = p_statement_id or r.to_statement = p_statement_id);
+$$;
+
+-- Corpus-wide view of the same question, for the relation pass to report from.
+create or replace function statement_contradictions()
+returns table (a uuid, b uuid, a_claim text, b_claim text,
+               locality text, a_source uuid, b_source uuid, rationale text)
+language sql stable security definer set search_path = public as $$
+  select r.from_statement, r.to_statement, sa.claim, sb.claim,
+         case when sa.derived_from = sb.derived_from then 'intra_record'
+              else 'cross_record' end,
+         sa.derived_from, sb.derived_from, r.rationale
+  from statement_relations r
+  join statements sa on sa.id = r.from_statement
+  join statements sb on sb.id = r.to_statement
+  where r.relation_kind = 'contradicts'
+    and r.retracted_at is null
+    and sa.retracted_at is null
+    and sb.retracted_at is null;
 $$;
 
 -- Rebuild honesty: which statements no longer match their source.
@@ -498,6 +539,7 @@ $$;
 revoke execute on function statement_attribution(uuid) from anon, authenticated, public;
 revoke execute on function statement_state(uuid) from anon, authenticated, public;
 revoke execute on function statement_conflicts(uuid) from anon, authenticated, public;
+revoke execute on function statement_contradictions() from anon, authenticated, public;
 revoke execute on function statement_drift() from anon, authenticated, public;
 revoke execute on function enforce_statement_span() from anon, authenticated, public;
 
