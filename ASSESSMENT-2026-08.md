@@ -376,3 +376,95 @@ make.
 Nothing here requires redesign, and that is the substantive good news: the
 authorization model held up under a day of adversarial pressure. What it lacks is
 proof that it can be rebuilt.
+
+---
+
+# ADDENDUM — 2026-08-09 (WO-15)
+
+## The verdict has not changed: **No.** But the blocker list has.
+
+| # | Blocker (2026-08-08) | State now |
+|---|---|---|
+| 1 | migration bodies exist only in hosted databases | **CLEARED** — 92 bodies extracted and pushed |
+| 2 | 4 applied migrations with no repo file | **CLEARED** — 57-60 filed |
+| 3 | restore verifier not proven able to fail | **STILL OPEN** |
+| 4 | granting real users any scope is outside my authority | unchanged, owner's call |
+
+**New blocker, and it is the one to read first:**
+
+| 5 | The compliance ruleset exists only as deployment data | **VERIFIED, NEW** |
+
+No file in `sql/` seeds `language_rules`. The entire disease-claim detector —
+both tiers — lives in exactly one database. A fresh install from this repo has
+**no compliance detection at all**, and reports a clean replay because there is
+no rule left to fail. This is the same class as blocker 1, which took three
+weeks to clear, on a control with regulatory consequences.
+
+It is not fixed here: seeding a statutory ruleset into a PUBLIC repo is a
+decision about what this repo publishes, not a defect fix.
+
+## Instance ten, and it is the cleanest example of the class
+
+`tests/51`'s verdict line was `SELECT 'SUITE_RESULT: PASS' AS verdict;` — a
+literal. The runner reads that line and nothing else, so every assertion in the
+file could fail and it scored green. **The suite whose entire purpose was
+proving the visibility predicate discriminates could not itself report a
+failure.**
+
+It was found by running the falsification instruction written at the bottom of
+that same file. The instruction was correct and had never been executed.
+Writing a test and running it are different acts, and a verification artifact
+can encode its own falsification and still ship green.
+
+## Gate discrimination — updated
+
+| gate | can it fail? |
+|---|---|
+| replay top-line verdict | **VERIFIED** — unresolved suites now block CLEAN (exit 2); previously three suites were unread and the run reported clean |
+| `tests/51` visibility | **VERIFIED** — fails on the pre-`coalesce` predicate, D1/D2 plus 7/12 NULL evaluations |
+| `tests/20` disease claims | **VERIFIED** — was emitting `*** FAIL ***` into an unread text column |
+| relation pass | **VERIFIED** — reverting the numeric rule turns it red and names the regression |
+| replica-mode audit guards | **VERIFIED** — reverting `ENABLE ALWAYS` turns four assertions red |
+| restore verifier | **UNKNOWN** — unchanged, still the largest open item |
+
+## New findings
+
+**B2 — `session_replication_role = replica`.** One session SET disables every
+origin-mode trigger; 39 of 39 in `public` are origin mode. Worse than TRUNCATE
+in kind (it permits silent in-place UPDATE with the audit guards off, so the
+record afterwards is *false*, not merely unattributed), better in reach: the
+parameter is superuser-context, `service_role` is not superuser, and there are
+no SET grants on it. Mitigated for the two audit tables (migration 67); the
+custody triggers deliberately stay origin-mode because the restore needs them
+off.
+
+**B1 — the only unscoped inference channel is declared.** A principal holding
+*zero* scopes still receives deployment-wide `review_queue` counts, ages and a
+by-kind breakdown from `session_boot`'s coordination block, which declares
+itself `coverage: unscoped`. Content counts correctly return 0. It leaks
+activity volume and the existence of review kinds, not content. Worth gating on
+holding at least one scope; queued.
+
+**B3 — a statement outlives its superseded source.** `statement_state()`
+correctly reports `source_superseded`. `statement_visible_to()` — the
+authorization path — consults only retraction and `can_read_row`, never source
+status. The currency information exists in a function the caller must remember
+to call. Asserted as a documented limit (`tests/52` assertion 12) rather than
+patched by hiding such statements, which would lose history.
+
+**A1/A2 — the statement layer earns its place narrowly.** The relation pass
+independently rediscovered all three predicted contradictions with zero
+inventions. Against document retrieval it wins categorically on the
+intra-record case (the document path has *no mechanism*, not a weak one) and
+loses on "why did we decide X", where extraction keeps the assertions and
+discards the argument. See `docs/13`.
+
+## What would clear the verdict now
+
+1. **Decide what to do about blocker 5** — the compliance ruleset in one place.
+2. **Resolve the equivalence case** in the discrimination proof, then run the
+   sovereignty proof to completion.
+3. **Decide the scope grants** for the five unprovisioned principals.
+
+Two of three are decisions rather than work.
+
