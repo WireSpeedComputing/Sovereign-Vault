@@ -5,6 +5,25 @@
 
 begin;
 
+-- ── DERIVED VERDICT (added 2026-08-09) ────────────────────────────────────
+-- This file proves its claims with PL/pgSQL `assert`, which aborts the block on
+-- failure. That is a real check -- a failing assert makes the runner report
+-- FAIL (error) -- but the file named no verdict, so a run in which the blocks
+-- never executed at all was indistinguishable from one in which every assert
+-- held. The runner scored it PASS?, left SUITE_FAILED untouched, and the run
+-- ended REPLAY CLEAN with exit 0.
+--
+-- Block completion is now recorded and the verdict is derived from those rows.
+-- The derivation is faithful rather than decorative: an assert that fails
+-- aborts its block, so "block completed" is exactly equivalent to "every assert
+-- in that block held". What it adds is proof the block RAN.
+--
+-- HONEST LIMIT: this cannot detect an assert being deleted from a block. The
+-- assert counts below are recorded so that a future reader comparing them
+-- against the file notices a discrepancy; nothing enforces it from SQL, because
+-- SQL cannot introspect the file that is running it.
+create temp table t_res(test text, pass boolean, detail text);
+
 create temporary table identity_test_ids (
   name text primary key,
   id uuid not null
@@ -146,6 +165,9 @@ begin
 end;
 $test$;
 
+insert into t_res values ('block1_admin_path_completed', true,
+  '15 asserts: capability resolution, identity binding, audit receipts');
+
 set role authenticated;
 select set_config(
   'request.jwt.claims',
@@ -165,6 +187,18 @@ begin
 end;
 $test$;
 reset role;
+
+insert into t_res values ('block2_forged_claims_denied_completed', true,
+  '4 asserts: forged-claim path denied, and denied FALSE rather than NULL');
+
+select test, coalesce(pass,false) as pass, detail from t_res order by test;
+
+-- Derived, never a literal. The count check is the load-bearing half: if a
+-- block stopped executing, its row is absent and this reports FAIL rather than
+-- passing over a shorter set.
+select case when count(*) = 2 and bool_and(coalesce(pass,false))
+            then 'SUITE_RESULT: PASS' else 'SUITE_RESULT: FAIL' end as verdict
+from t_res;
 
 rollback;
 
