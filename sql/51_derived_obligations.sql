@@ -5,7 +5,7 @@
 -- ############################################################
 -- APPLY ORDER. Assumes, in order:
 --   sql/40_task_board.sql            (tasks, task_referenceable, task_kind)
---   sql/49_task_board_policies.sql   (can_read_row composition on tasks)
+--   sql/50_task_board_policies.sql   (can_read_row composition on tasks)
 -- ############################################################
 --
 -- ══════════════════════════════════════════════════════════════════════════

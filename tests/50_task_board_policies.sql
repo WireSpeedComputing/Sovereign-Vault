@@ -1,4 +1,4 @@
--- tests/49_task_board_policies.sql — covers sql/49_task_board_policies.sql.
+-- tests/50_task_board_policies.sql — covers sql/50_task_board_policies.sql.
 --
 -- ══════════════════════════════════════════════════════════════════════════
 -- HOW TO RUN, AND WHY IT IS NOT A BEGIN/ROLLBACK SUITE
@@ -18,7 +18,7 @@
 -- REQUIRES-DISPOSABLE-CLUSTER. Run it against a throwaway PG17 cluster that has
 -- the whole of sql/ applied, never against a deployment:
 --
---   psql -d <disposable_db> -f tests/49_task_board_policies.sql
+--   psql -d <disposable_db> -f tests/50_task_board_policies.sql
 --
 -- It creates the `authenticator` role if absent and a scratch schema t45, and
 -- drops t45 at the end. It does NOT drop its fixture rows: on a disposable
