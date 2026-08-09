@@ -8,7 +8,7 @@
 -- ══════════════════════════════════════════════════════════════════════════
 -- THE ANSWER: session_replication_role = replica
 -- ══════════════════════════════════════════════════════════════════════════
--- One SET, session-scoped, and every ORIGIN-mode trigger stops firing. Measured
+-- One SET, session-scoped, and every origin-mode trigger stops firing. Measured
 -- on the live deployment: 39 of 39 non-internal triggers in `public` are origin
 -- mode, including all 25 on the governed tables --
 --
