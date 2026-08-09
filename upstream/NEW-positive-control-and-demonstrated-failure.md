@@ -51,6 +51,56 @@ Because they are the honest instinct. Fail-closed is the right default and a den
 
 This matters more for a custody protocol than for most software, because the whole value proposition is a claim about what a system will not do. A suite that cannot distinguish "will not do the wrong thing" from "will not do anything" cannot support that claim.
 
+## The cleanest instance of the class, and it is ours
+
+Since drafting this we found the purest example either shape has produced, and
+it belongs here rather than in a footnote.
+
+A test file exists whose entire purpose is proving that one half of an access
+predicate actually discriminates — the half that, as it turned out, had never
+denied anything in production, because every row in the deployment carried the
+permissive value. The file is careful. It has positive controls, a
+null-assertion guard, and a section comment explaining that a NULL renders as a
+blank cell and reads as a pass to a grep-based runner.
+
+Its verdict line was, in full:
+
+```sql
+SELECT 'SUITE_RESULT: PASS' AS verdict;
+```
+
+A literal. The runner reads that line and nothing else. Every assertion in the
+file could have been false and it scored green.
+
+**The part that matters for this issue:** at the bottom of that same file, its
+author had written the falsification instruction —
+
+> revert the predicate to the pre-`coalesce` form and confirm D1 and D2 fail. If
+> they still pass, this file is not testing what its header claims.
+
+That instruction is correct. Carrying it out is exactly what surfaced the
+hardcoded verdict: the assertions did not fail, because nothing in the file
+could report a failure. **The instruction had never been run.**
+
+So the artifact encoded its own falsification test, shipped, and stayed green
+for as long as nobody executed the sentence it ended with. Writing a test and
+running a test are different acts, and a verification artifact can contain the
+precise recipe for its own refutation and still certify the thing it does not
+check.
+
+This is why the criterion below is phrased as *the conformance run executes the
+demonstration* rather than *a demonstration exists*. An unexecuted
+falsification instruction is documentation, and documentation of a check is not
+a check.
+
+Three further gates in the same suite turned out to be unread for a different
+reason: they predate a machine-readable verdict convention, so the runner scored
+them "PASS?" — printed, not counted — and the run reported clean at exit 0 with
+those suites unscored. One of them was emitting real failure markers into a text
+column at the time, for a live gap in a regulated-claims detector. Hence the
+separate criterion that a run containing an unresolved check cannot report full
+conformance.
+
 ## Proposed conformance criteria
 
 - [ ] **Every denial criterion is paired with a grant criterion, in the same suite and against the same fixture.** An authorized principal is shown to *receive* exactly what they are entitled to. Where the spec states a criterion as "X must be rejected", it also states "Y must be accepted" over the same fixture.

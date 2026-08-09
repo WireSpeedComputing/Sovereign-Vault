@@ -1,12 +1,15 @@
 -- tests/20_disease_claim_term_coverage.sql
 --
--- REQUIRES-DEPLOYMENT: needs the seeded language_rules set
+-- RUNS ON EVERY REPLAY as of 2026-08-09. It was REQUIRES-DEPLOYMENT until
+-- sql/53 seeded the regulatory baseline, because a fresh cluster carried none
+-- of the rules and the suite reported failures that were missing seeds rather
+-- than missing coverage -- a result worse than no result, because it buries a
+-- real gap among artefacts.
 --
--- Marked deployment-only for the same reason tests/12 is: it asserts against
--- the seeded rule set, and a fresh replay cluster carries only part of it. Run
--- in a fresh cluster it reported three failures, two of which were missing
--- seeds rather than missing coverage -- a result that is worse than no result,
--- because it buries a real gap among artefacts.
+-- The opt-out was the right call while the ruleset existed only as deployment
+-- data, and removing it is the point of seeding the baseline: the whole reason
+-- that gap survived is that the check which would have caught it could not run
+-- anywhere it would be noticed.
 --
 -- IT WAS UNREADABLE UNTIL 2026-08-09. This file emits `*** FAIL ***` in a text
 -- column and carried no SUITE_RESULT line, so the runner scored it `PASS?`,
