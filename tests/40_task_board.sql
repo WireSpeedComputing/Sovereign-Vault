@@ -46,7 +46,10 @@ INSERT INTO scope_registry (scope,kind,identifier,description,declared_by) VALUE
  ('workstream:suppliers','workstream','suppliers','Supplier workstream',
   '11111111-1111-1111-1111-111111111111'),
  ('workstream:unclassified','workstream','unclassified',
-  'Reserved scope for rows with no workstream','11111111-1111-1111-1111-111111111111');
+  'Reserved scope for rows with no workstream','11111111-1111-1111-1111-111111111111')
+-- sql/54 now seeds the reserved scope, so a suite that also declares it must
+-- tolerate it already being present.
+ON CONFLICT (scope) DO NOTHING;
 
 INSERT INTO capability_grants (principal_id,resource_scope,permissions,granted_by) VALUES
  ('11111111-1111-1111-1111-111111111111','workstream:suppliers','{read}',
