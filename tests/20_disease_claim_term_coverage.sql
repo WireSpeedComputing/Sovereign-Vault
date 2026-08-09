@@ -1,5 +1,20 @@
 -- tests/20_disease_claim_term_coverage.sql
 --
+-- REQUIRES-DEPLOYMENT: needs the seeded language_rules set
+--
+-- Marked deployment-only for the same reason tests/12 is: it asserts against
+-- the seeded rule set, and a fresh replay cluster carries only part of it. Run
+-- in a fresh cluster it reported three failures, two of which were missing
+-- seeds rather than missing coverage -- a result that is worse than no result,
+-- because it buries a real gap among artefacts.
+--
+-- IT WAS UNREADABLE UNTIL 2026-08-09. This file emits `*** FAIL ***` in a text
+-- column and carried no SUITE_RESULT line, so the runner scored it `PASS?`,
+-- left SUITE_FAILED untouched, and the run ended REPLAY CLEAN with exit 0. A
+-- file written because a false negative reached a live deployment then spent
+-- months in a state where its own failures could not be read. Verdict is now
+-- derived below.
+--
 -- Regression tests for disease-claim detection in compliance_check().
 --
 -- WHY THIS FILE EXISTS: a false-NEGATIVE was found on a live deployment where
@@ -20,6 +35,13 @@
 -- disease-claim ruleset. This repo does not ship seed rules (they are
 -- deployment data); adapt the expectations to your own ruleset.
 
+-- Materialised so the VERDICT below is derived from the same rows the human
+-- reads, rather than recomputed from a duplicated term list that could drift
+-- from it -- and rather than grepped back out of formatted text.
+-- No ON COMMIT DROP: this file runs outside an explicit transaction, so each
+-- statement autocommits and the table would be dropped before the next SELECT
+-- could read it. The temp table dies with the psql session regardless.
+CREATE TEMP TABLE t_cov AS
 WITH t(label, txt, expect) AS (VALUES
  -- named-disease layer (expect critical findings)
  ('bare anxiety',        'This product cures anxiety.',              'FIRE'),
@@ -58,5 +80,18 @@ SELECT t.label, t.expect,
   END AS result
 FROM t;
 
+SELECT * FROM t_cov;
+
 -- Expected: 16 rows, all PASS. Any FAIL is a live compliance gap, not a
 -- test-authoring problem -- investigate the rule, not the test, first.
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- DERIVED VERDICT
+-- ══════════════════════════════════════════════════════════════════════════
+-- The file emitted '*** FAIL ***' in a text column and named no verdict, so the
+-- runner scored it PASS? and the run reported REPLAY CLEAN with exit 0. Written
+-- because a false negative reached a live deployment; then left in a state where
+-- its own failures could not be read.
+SELECT CASE WHEN count(*) = 0 THEN 'SUITE_RESULT: PASS'
+            ELSE 'SUITE_RESULT: FAIL' END AS verdict
+FROM t_cov WHERE result <> 'PASS';
