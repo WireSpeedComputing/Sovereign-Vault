@@ -144,6 +144,59 @@ select 8, 'a retracted statement is visible to nobody',
   coalesce(statement_visible_to(pg_temp.id('st_shared'), pg_temp.id('owner')) = false, false),
   'an unresolvable statement is not a visible one';
 
+-- ── 9-11: A1, locality is DERIVED ─────────────────────────────────────────
+-- Two statements sharing a derived_from are intra-record; otherwise
+-- cross-record. Asserted here rather than in a separate suite because this
+-- fixture already has two sources and the machinery to build verifying spans.
+-- st_a and st_b share src_priv; st_c comes from the OTHER source. The first
+-- draft paired st_a with st_priv -- also derived from src_priv -- and assertion
+-- 10 correctly returned intra_record. The fixture was wrong, not the function.
+insert into t_ids(k,v) values ('st_a', gen_random_uuid()), ('st_b', gen_random_uuid()),
+                              ('st_c', gen_random_uuid());
+select pg_temp.mk_statement(pg_temp.id('st_a'), pg_temp.id('src_priv'), 'private');
+select pg_temp.mk_statement(pg_temp.id('st_b'), pg_temp.id('src_priv'), 'private');
+select pg_temp.mk_statement(pg_temp.id('st_c'), pg_temp.id('src_shared'), 'private');
+
+insert into statement_relations(from_statement, to_statement, relation_kind,
+                                asserted_by_extraction, rationale, method)
+select least(pg_temp.id('st_a'), pg_temp.id('st_b')),
+       greatest(pg_temp.id('st_a'), pg_temp.id('st_b')),
+       'contradicts', pg_temp.id('extraction'),
+       'suite52: two claims from the same record', 'human';
+
+insert into t_result
+select 9, 'two statements sharing a source are classified intra_record',
+  coalesce((select locality from statement_conflicts(pg_temp.id('st_a'))
+            where other_statement = pg_temp.id('st_b')) = 'intra_record', false),
+  'locality=' || coalesce((select locality from statement_conflicts(pg_temp.id('st_a'))
+                           where other_statement = pg_temp.id('st_b')),'NULL');
+
+-- The cross-record case, so assertion 9 is not passing because the function
+-- returns one constant.
+insert into statement_relations(from_statement, to_statement, relation_kind,
+                                asserted_by_extraction, rationale, method)
+select least(pg_temp.id('st_a'), pg_temp.id('st_c')),
+       greatest(pg_temp.id('st_a'), pg_temp.id('st_c')),
+       'contradicts', pg_temp.id('extraction'),
+       'suite52: claims from different records', 'human';
+
+insert into t_result
+select 10, 'statements from different sources are classified cross_record',
+  coalesce((select locality from statement_conflicts(pg_temp.id('st_a'))
+            where other_statement = pg_temp.id('st_c')) = 'cross_record', false),
+  'locality=' || coalesce((select locality from statement_conflicts(pg_temp.id('st_a'))
+                           where other_statement = pg_temp.id('st_c')),'NULL');
+
+-- 11. DERIVED, not stored: nothing was written to record the classification, so
+--     the corpus-wide reader must agree with the per-statement one without any
+--     second source of truth to keep in step.
+insert into t_result
+select 11, 'the corpus-wide reader agrees, with no stored classification anywhere',
+  coalesce((select count(*) from statement_contradictions() where locality='intra_record') = 1
+       and (select count(*) from statement_contradictions() where locality='cross_record') = 1, false),
+  'intra=' || (select count(*) from statement_contradictions() where locality='intra_record')::text
+  || ' cross=' || (select count(*) from statement_contradictions() where locality='cross_record')::text;
+
 insert into t_result
 select 99,'GUARD_no_null_assertions', coalesce(count(*)=0,false),
   count(*)::text||' assertion(s) evaluated to NULL'
