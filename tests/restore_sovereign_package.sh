@@ -209,6 +209,50 @@ else
   fail "data load failed"
 fi
 
+# ── RESTORE ALWAYS-MODE TRIGGER FIRING ────────────────────────────────────
+# pg_dump --disable-triggers wraps the load in DISABLE TRIGGER ALL / ENABLE
+# TRIGGER ALL, and the plain ENABLE form sets tgenabled='O'. Any trigger the
+# schema marked ENABLE ALWAYS therefore comes back from a restore in ORIGIN
+# mode -- silently, because the trigger is present and enabled and only its
+# FIRING MODE changed.
+#
+# It matters because the append-only audit guards are ALWAYS precisely so that
+# one `SET session_replication_role = replica` cannot switch the audit off. A
+# restore downgrading them re-opens that bypass in the copy you rebuilt in
+# order to trust.
+#
+# Caught by check J, which compares canonicalized definitions and named both
+# triggers as present-under-the-same-name-with-a-different-definition. A
+# name-equality check calls that clean.
+#
+# Re-asserted from the list recorded at export, not from a hardcoded set, so a
+# trigger hardened later travels without anyone editing this script. A missing
+# list is a FAILURE, not a skip: a package that cannot say which triggers were
+# ALWAYS cannot be restored faithfully, and silently continuing would restore a
+# weaker database that verifies as identical everywhere except J.
+if [ -f "$PKG/data/always_triggers.tsv" ]; then
+  # event_triggers OFF for the same reason the data load turns them off: ALTER
+  # TABLE is DDL, so trg_log_ddl_change records every one of these into
+  # schema_changelog. The restored changelog must equal the SOURCE's history,
+  # not the source's history plus a burst of restore mechanics -- and the first
+  # version of this block failed check A with exactly two extra changelog rows,
+  # one per re-asserted trigger.
+  {
+    echo "set event_triggers = off;"
+    while IFS=$'\t' read -r nsp tbl trg; do
+      [ -z "${trg:-}" ] && continue
+      printf 'alter table %s.%s enable always trigger %s;\n' "$nsp" "$tbl" "$trg"
+    done < "$PKG/data/always_triggers.tsv"
+    echo "set event_triggers = on;"
+  } > "$SOCK_DIR/_always.sql"
+  N_ALWAYS=$(grep -c "enable always trigger" "$SOCK_DIR/_always.sql" || true)
+  psql -d "$DB" -X -q -v ON_ERROR_STOP=1 -f "$SOCK_DIR/_always.sql" >/dev/null 2>&1 \
+    || fail "could not restore ALWAYS firing modes from the package manifest"
+  echo "   always-mode trigger firing restored on $N_ALWAYS trigger(s)"
+else
+  fail "package has no data/always_triggers.tsv: cannot know which triggers were ALWAYS, and a restore that guesses produces a database whose audit guards are quietly weaker than the source"
+fi
+
 EVT=$(psql -d "$DB" -t -A -c "select evtenabled from pg_event_trigger where evtname='trg_log_ddl_change';")
 [ "$EVT" = "O" ] || fail "the DDL changelog event trigger is not enabled after load (evtenabled=$EVT)"
 echo "   DDL changelog event trigger re-enabled"

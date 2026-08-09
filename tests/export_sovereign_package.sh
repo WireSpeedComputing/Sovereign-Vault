@@ -163,6 +163,34 @@ pg_dump -d "$DB" --data-only --no-owner --no-privileges --disable-triggers \
   > "$OUT/data/data.sql" 2>"$OUT/data/data.err" \
   || fail "pg_dump --data-only failed; see $OUT/data/data.err"
 
+# ── TRIGGER FIRING MODES TRAVEL SEPARATELY, AND THEY MUST ─────────────────
+# pg_dump --data-only --disable-triggers wraps the load in
+# ALTER TABLE ... DISABLE TRIGGER ALL / ENABLE TRIGGER ALL. The re-enable is
+# the plain form, and the plain form sets tgenabled='O' -- so any trigger the
+# schema had marked ENABLE ALWAYS comes back from a restore in ORIGIN mode.
+#
+# That is not cosmetic here. The two append-only audit guards are ALWAYS
+# precisely so a single `SET session_replication_role = replica` cannot switch
+# the audit off (migration 67). A restore silently downgrading them re-opens
+# that bypass in the copy you rebuilt in order to trust it.
+#
+# Found by check J in verify_restore, which compares canonicalized DEFINITIONS
+# and named both triggers as "present under the same name with a different
+# definition". A name-equality check reports that as clean, which is the entire
+# argument for J existing.
+#
+# Recorded as data rather than hardcoded: whatever is ALWAYS at export time is
+# re-asserted at restore time, so a trigger hardened later travels without
+# anyone remembering to edit the restore script.
+psql -d "$DB" -X -A -t -q -F $'\t' -c "
+  select n.nspname, c.relname, t.tgname
+  from pg_trigger t
+  join pg_class c on c.oid = t.tgrelid
+  join pg_namespace n on n.oid = c.relnamespace
+  where not t.tgisinternal and t.tgenabled = 'A'
+  order by 1,2,3" > "$OUT/data/always_triggers.tsv" 2>/dev/null || true
+echo "   always-mode triggers recorded: $(wc -l < "$OUT/data/always_triggers.tsv" | tr -d ' ')"
+
 # Sequence state travels with --data-only via setval(); assert it is present,
 # because a restored identity column that restarts at 1 collides on the next
 # insert and does so silently until then.

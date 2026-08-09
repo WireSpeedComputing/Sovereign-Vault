@@ -312,7 +312,7 @@ echo "   definition check reports drift on that correct pair forever."
 run_case "-    a body is reformatted and its comments rewritten" CLEAN "-" \
   "create or replace function is_owner_or_shared(p_row_owner uuid,
      p_row_visibility visibility_level, p_principal_id uuid)
-   returns boolean language sql stable set search_path to 'public' as \$fn\$
+   returns boolean language sql immutable set search_path to 'public' as \$fn\$
        /* Commentary bearing no resemblance to the original, plus a block
           comment the original never had. */
        SELECT coalesce(p_row_owner = p_principal_id, false)
