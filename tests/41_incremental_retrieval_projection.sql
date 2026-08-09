@@ -150,14 +150,38 @@ DO $c$ DECLARE v uuid; n_before int; n_after int; BEGIN
   INSERT INTO t VALUES ('wiki_insert_projects_sections', n_before >= 2,
     'sections projected on insert: '||n_before);
 
-  UPDATE wiki_pages SET content = E'# One\nrewritten\n\n## Two\nalso rewritten\n\n## Three\nnew section'
-   WHERE id=v;
-  SELECT count(*) INTO n_after FROM retrieval_units
-   WHERE source_id=v AND invalidated_at IS NULL;
-  INSERT INTO t VALUES ('wiki_update_resections', n_after >= 3 AND n_after > n_before,
-    're-sectioned on content change: '||n_before||' -> '||n_after);
+  -- REWRITTEN after migration 57 (custody field locks on wiki_pages).
+  --
+  -- This block used to UPDATE the content in place and assert the projection
+  -- re-sectioned. That is no longer reachable: the wiki custody lock is
+  -- unconditional -- there is no GUC window like app.promoting -- so wiki
+  -- content cannot change in place through ANY sanctioned path. The old
+  -- assertion was exercising a branch the schema had made dead, and it went red
+  -- the first time the suite ran after 57 landed.
+  --
+  -- Replaced with the two assertions that describe what the system now does,
+  -- rather than weakening the old one until it passed:
+  --   6a  an in-place content UPDATE is REFUSED
+  --   6b  re-sectioning still happens, via a superseding row
+  BEGIN
+    UPDATE wiki_pages SET content = E'# One\nrewritten' WHERE id=v;
+    INSERT INTO t VALUES ('wiki_inplace_content_update_refused', false,
+      'ACCEPTED -- the custody lock on wiki_pages content has regressed');
+  EXCEPTION WHEN others THEN
+    INSERT INTO t VALUES ('wiki_inplace_content_update_refused', true, SQLERRM);
+  END;
+
+  PERFORM supersede_wiki('/ops/runbook','Runbook',
+          E'# One\nrewritten\n\n## Two\nalso rewritten\n\n## Three\nnew section',
+          'human_direct','suite:resection','11111111-1111-1111-1111-111111111111',
+          'suite: re-sectioning happens through supersession, not in-place edit');
+  SELECT count(*) INTO n_after FROM retrieval_units ru
+    JOIN wiki_pages w ON w.id = ru.source_id
+   WHERE w.path='/ops/runbook' AND w.status='current' AND ru.invalidated_at IS NULL;
+  INSERT INTO t VALUES ('wiki_supersession_resections', n_after >= 3,
+    're-sectioned via supersession: '||n_before||' -> '||n_after);
 EXCEPTION WHEN others THEN
-  INSERT INTO t VALUES ('wiki_update_resections',false,SQLERRM); END $c$;
+  INSERT INTO t VALUES ('wiki_supersession_resections',false,SQLERRM); END $c$;
 
 -- ── 7. the trigger is incremental, not a rescan: touching one row must not
 -- regenerate units belonging to other rows.

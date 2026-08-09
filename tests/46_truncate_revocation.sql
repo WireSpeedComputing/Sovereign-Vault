@@ -1,4 +1,4 @@
--- tests/44_truncate_revocation.sql
+-- tests/46_truncate_revocation.sql
 --
 -- Proves sql/44 removed the table-level bypass AND that perimeter_assert() can
 -- see one when it exists.
