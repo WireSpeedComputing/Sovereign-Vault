@@ -520,6 +520,81 @@ language sql stable security definer set search_path = public as $$
     and sb.retracted_at is null;
 $$;
 
+-- ══════════════════════════════════════════════════════════════════════════
+-- THE RELATION PASS (A1)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Proposes contradiction CANDIDATES mechanically. It does not write relations:
+-- "these two claims conflict" is a judgement that carries custody, so a human or
+-- a recorded extraction asserts it into statement_relations. This function only
+-- narrows where to look.
+--
+-- Two divergence shapes, both computed from the claim text:
+--   numeric_divergence    same subject vocabulary, different figures
+--   exclusivity_conflict  same subject, incompatible exclusivity markers
+--                         (a token ending in -only, or "shared")
+--
+-- ── MEASURED, NOT ASSUMED ────────────────────────────────────────────────
+-- Run against a 16-statement extraction from six real records chosen because
+-- three contradictions were already known to be in them, with the predictions
+-- committed to the repo BEFORE the pass was written. Results:
+--
+--   min_shared=3, disjoint-number rule : 2 of 3 known found, 0 invented
+--   min_shared=2, unequal-number rule  : 3 of 3 known found, 0 invented
+--   min_shared=1, unequal-number rule  : 3 of 3 known + 3 pairs of an
+--                                        UNPREDICTED real conflict, 1 invented
+--
+-- THE RULE THAT MATTERED. The first version required the two number sets to be
+-- DISJOINT. That silently misses the commonest real shape: a figure that was
+-- partially updated, so the pair shares one number and disagrees on another. A
+-- record saying a document "still shows 98, should be 79/99" and another saying
+-- it "was updated from 98 to 85" share 98 -- and were invisible. Requiring the
+-- sets merely to be UNEQUAL found it and cost nothing in precision.
+--
+-- THE MISS THAT REMAINS. A third real conflict -- three records giving
+-- incompatible monthly savings figures -- needs min_shared=1, because its
+-- subject vocabulary is short words the stoplist eats. At that threshold the
+-- pass invents one pair: two claims sharing only the token "subscriber" that do
+-- not conflict. Precision 8/9 at threshold 1, 5/5 at threshold 2. The threshold
+-- is a real dial, not a tuning artefact, and the default is set to the
+-- precision-preserving end because a contradiction queue nobody trusts is
+-- worse than one that is short.
+create or replace function statement_contradiction_candidates(p_min_shared int default 2)
+returns table(a uuid, b uuid, a_claim text, b_claim text, locality text,
+              reason text, shared_tokens int, a_numbers text, b_numbers text)
+language sql stable security definer set search_path = public as $$
+with norm as (
+  select s.id, s.claim, s.derived_from,
+    array(select distinct t from regexp_split_to_table(
+            lower(regexp_replace(s.claim,'[^A-Za-z0-9 .$%/-]',' ','g')),'\s+') t
+          where length(t) >= 4 and t !~ '^[0-9.$%/-]+$'
+            and t not in ('that','this','with','from','they','have','been','than','then','which',
+                          'where','their','about','into','also','still','both','when','every',
+                          'each','more','less','over','under','same','other','uses','used','make',
+                          'makes','month','subs','per','and','are','the')) as toks,
+    array(select distinct m[1] from regexp_matches(s.claim,'([0-9][0-9,]*\.?[0-9]*)','g') m) as nums,
+    array(select distinct t from regexp_split_to_table(
+            lower(regexp_replace(s.claim,'[^A-Za-z0-9 -]',' ','g')),'\s+') t
+          where t like '%-only' or t = 'shared') as excl
+  from statements s where s.retracted_at is null
+)
+select x.id, y.id, x.claim, y.claim,
+       case when x.derived_from = y.derived_from then 'intra_record' else 'cross_record' end,
+       case when x.excl <> '{}' and y.excl <> '{}' and not (x.excl && y.excl)
+            then 'exclusivity_conflict' else 'numeric_divergence' end,
+       cardinality(array(select unnest(x.toks) intersect select unnest(y.toks))),
+       array_to_string(x.nums,','), array_to_string(y.nums,',')
+from norm x join norm y on x.id < y.id
+where cardinality(array(select unnest(x.toks) intersect select unnest(y.toks))) >= p_min_shared
+  and ((x.nums <> '{}' and y.nums <> '{}'
+        and not (x.nums @> y.nums and y.nums @> x.nums))
+    or (x.excl <> '{}' and y.excl <> '{}' and not (x.excl && y.excl)));
+$$;
+
+comment on function statement_contradiction_candidates(int) is
+  'Proposes contradiction candidates from claim text. Proposes only -- asserting a contradiction is a custody-bearing judgement and belongs in statement_relations with an asserter. locality is derived from shared derived_from, never stored.';
+
+revoke execute on function statement_contradiction_candidates(int) from anon, authenticated, public;
+
 -- Rebuild honesty: which statements no longer match their source.
 create or replace function statement_drift()
 returns table (statement_id uuid, derived_from uuid, claim text, reason text)

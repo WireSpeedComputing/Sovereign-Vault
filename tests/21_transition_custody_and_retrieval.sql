@@ -11,6 +11,14 @@
 
 BEGIN;
 
+-- ── DERIVED VERDICT (added 2026-08-09) ────────────────────────────────────
+-- This file emitted one result set per assertion and named no verdict, so the
+-- runner could only score it PASS? -- it printed that, left SUITE_FAILED
+-- untouched, and the run reported REPLAY CLEAN and exit 0 with this suite
+-- unread. Every assertion below could have been false without anything saying
+-- so. Results are now accumulated and the verdict is computed from them.
+CREATE TEMP TABLE t_res(test text, pass boolean);
+
 INSERT INTO principals (id,kind,display_name,email) VALUES
  ('11111111-1111-1111-1111-111111111111','human','H1','h1@example.com'),
  ('22222222-2222-2222-2222-222222222222','human','H2','h2@example.com');
@@ -38,32 +46,39 @@ INSERT INTO memories (id,content,source_kind,provenance_basis,status,owner,visib
 VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','original fact','manual','human_direct',
         'proposed','11111111-1111-1111-1111-111111111111','shared');
 
+INSERT INTO t_res
 SELECT 'promote_precondition' AS test,
   promote_memory('aaaaaaaa-0000-0000-0000-00000000000a',
                  '11111111-1111-1111-1111-111111111111') = 'promoted' AS pass;
 
 -- actor custody, positive path
+INSERT INTO t_res
 SELECT 'supersede_returns_id' AS test,
   supersede_memory('aaaaaaaa-0000-0000-0000-00000000000a','corrected fact',
     'decision_record','test citation','11111111-1111-1111-1111-111111111111',
     'positive path') IS NOT NULL AS pass;
 
+INSERT INTO t_res
 SELECT 'old_row_superseded' AS test, status = 'superseded' AS pass
 FROM memories WHERE id='aaaaaaaa-0000-0000-0000-00000000000a';
 
+INSERT INTO t_res
 SELECT 'actor_recorded' AS test,
   metadata->>'superseded_by_principal' = '11111111-1111-1111-1111-111111111111' AS pass
 FROM memories WHERE id='aaaaaaaa-0000-0000-0000-00000000000a';
 
 -- the audit trail must state what the actor claim actually proves
+INSERT INTO t_res
 SELECT 'assurance_labelled' AS test,
   metadata->>'actor_assurance' = 'caller_asserted_unauthenticated' AS pass
 FROM memories WHERE id='aaaaaaaa-0000-0000-0000-00000000000a';
 
+INSERT INTO t_res
 SELECT 'successor_links_back' AS test, count(*) = 1 AS pass
 FROM memories WHERE supersedes='aaaaaaaa-0000-0000-0000-00000000000a' AND status='current';
 
 -- one live successor only: concurrent supersession must not fork the record
+INSERT INTO t_res
 SELECT 'no_forked_successor' AS test, count(*) = 0 AS pass FROM (
   SELECT supersedes FROM memories
   WHERE supersedes IS NOT NULL AND status='current'
@@ -73,16 +88,19 @@ SELECT 'no_forked_successor' AS test, count(*) = 0 AS pass FROM (
 -- retrieval, end to end
 SELECT * FROM refresh_retrieval_units();
 
+INSERT INTO t_res
 SELECT 'retrieval_finds_successor' AS test,
   (retrieve_context('11111111-1111-1111-1111-111111111111','corrected fact')
      ->>'units_matched')::int >= 1 AS pass;
 
 -- absent an embedding pipeline the receipt must say fts_only, not imply semantic
+INSERT INTO t_res
 SELECT 'receipt_reports_fts_only' AS test,
   (retrieve_context('11111111-1111-1111-1111-111111111111','corrected')
      ->>'mode') = 'fts_only' AS pass;
 
 -- an empty query is NOT a clean pass
+INSERT INTO t_res
 SELECT 'empty_query_not_evaluated' AS test,
   (retrieve_context('11111111-1111-1111-1111-111111111111','')
      ->>'retrieval_status') = 'not_evaluated' AS pass;
@@ -94,9 +112,21 @@ SELECT 'empty_query_not_evaluated' AS test,
 -- 'evaluated' and broke on apply -- which is the #70 signature-change failure
 -- happening to a real caller, in our own suite. Asserted as "was evaluated at
 -- all" rather than pinned to one spelling.
+INSERT INTO t_res
 SELECT 'nonsense_query_evaluated' AS test,
   (retrieve_context('11111111-1111-1111-1111-111111111111','zzqq nonexistent')
      ->>'retrieval_status') LIKE 'evaluated%' AS pass;
+
+SELECT test, coalesce(pass,false) AS pass FROM t_res ORDER BY test;
+
+-- Verdict derived, never a literal. The COUNT check matters as much as the
+-- bool_and: a suite that stopped emitting assertions would otherwise report a
+-- clean pass over an empty set. The first attempt at this transform wrapped
+-- only 5 of the 11 assertions -- it skipped every statement preceded by a
+-- comment line -- and the count check is exactly what caught that.
+SELECT CASE WHEN count(*) = 11 AND bool_and(coalesce(pass,false))
+            THEN 'SUITE_RESULT: PASS' ELSE 'SUITE_RESULT: FAIL' END AS verdict
+FROM t_res;
 
 ROLLBACK;
 
