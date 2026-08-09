@@ -1,4 +1,4 @@
--- tests/50_derived_obligations.sql — covers sql/50_derived_obligations.sql.
+-- tests/51_derived_obligations.sql — covers sql/51_derived_obligations.sql.
 --
 -- Every `pass` must be TRUE. Section B is FAILING-NEGATIVES: TRUE means the
 -- forbidden operation was REJECTED.
