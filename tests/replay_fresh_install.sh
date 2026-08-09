@@ -98,6 +98,7 @@ fi
 # is exactly the sort of thing that quietly stops running a test.
 TEST_DIR="$(cd "$(dirname "$0")" && pwd)"
 SUITE_FAILED=0
+SUITE_UNRESOLVED=0
 echo "== validation suite =="
 for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
   # Line-anchored, and only in the header. The first version grepped for the
@@ -141,11 +142,47 @@ for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
       echo "$out" | grep -E '\|[[:space:]]*f[[:space:]]*(\||$)' | head -8 | sed 's/^/        /'
       SUITE_FAILED=1
     else
-      echo "  PASS? $(basename "$tf") (legacy heuristic, no SUITE_RESULT verdict -- add one)"
+      # ── UNRESOLVED IS NOT A PASS ────────────────────────────────────
+      # These files predate SUITE_RESULT and print human-readable results. The
+      # runner cannot read a verdict from them, so it used to print PASS? and
+      # move on -- leaving SUITE_FAILED untouched, so the run ended REPLAY CLEAN
+      # and exit 0 with three suites unread. WO-13 called this instance eight and
+      # asked that an unresolved suite not be able to produce a clean top-line
+      # verdict. It still could until now.
+      #
+      # Two changes. First, scan for the legacy failure marker, because
+      # 20_disease_claim_term_coverage.sql really does emit `*** FAIL ***` rows
+      # for live compliance gaps and nothing was reading them. Second, count the
+      # suite as UNRESOLVED, which blocks CLEAN below.
+      #
+      # The marker scan is a heuristic and heuristics are what got this wrong
+      # before. It is safe here only because it can no longer produce a clean
+      # run on its own: a false negative still leaves the suite UNRESOLVED.
+      if echo "$out" | grep -qE '\*\*\* FAIL \*\*\*'; then
+        echo "  FAIL  $(basename "$tf") (legacy marker: *** FAIL *** in output)"
+        echo "$out" | grep -E '\*\*\* FAIL \*\*\*' | head -3 | sed 's/^/        /'
+        SUITE_FAILED=1
+      else
+        echo "  UNRESOLVED  $(basename "$tf") (no SUITE_RESULT verdict -- cannot be scored)"
+        SUITE_UNRESOLVED=$((SUITE_UNRESOLVED+1))
+      fi
     fi
   fi
 done
 [ "$SUITE_FAILED" -ne 0 ] && { echo "VALIDATION SUITE FAILED"; exit 1; }
+
+# Exit 2, not 0 and not 1. An unresolved suite is not a failure and it is not a
+# pass; reporting it as either is how this went unnoticed. "Everything that
+# could be scored passed" is a different claim from "everything passed", and the
+# top line must not make the second claim while the second is unknown.
+if [ "$SUITE_UNRESOLVED" -ne 0 ]; then
+  echo
+  echo "REPLAY INCOMPLETE -- $SUITE_UNRESOLVED suite(s) could not be scored."
+  echo "Every suite that COULD be scored passed. That is not the same as a clean"
+  echo "replay, and this line exists so the difference is visible. Give the"
+  echo "unresolved suites a derived SUITE_RESULT line."
+  exit 2
+fi
 
 echo
 echo "REPLAY CLEAN."
