@@ -197,6 +197,42 @@ select 11, 'the corpus-wide reader agrees, with no stored classification anywher
   'intra=' || (select count(*) from statement_contradictions() where locality='intra_record')::text
   || ' cross=' || (select count(*) from statement_contradictions() where locality='cross_record')::text;
 
+-- ── 12: B3 DOCUMENTED LIMIT, asserted so it inverts when closed ───────────
+-- statement_visible_to() answers ONLY the authorization question. It does not
+-- consult whether the source record is still current, so a statement derived
+-- from a superseded record remains visible and reads as a live claim to any
+-- caller that asks only "may I see this".
+--
+-- The currency information exists -- statement_state() reports
+-- 'source_superseded' correctly -- but it lives in a different function the
+-- caller must remember to call. That is this project's recurring shape: the
+-- information exists and the enforcing path does not consult it.
+--
+-- NOT silently fixed by hiding such statements. A superseded statement is
+-- history and hiding it loses that. The correct fix is to make the two
+-- inseparable at the read surface, which is a design change, not a patch.
+-- Asserted as a LIMIT so that closing it turns this red and forces the
+-- assertion to be rewritten as a real positive test -- documented limits rot,
+-- asserted limits do not.
+do $c$
+declare v_src uuid; v_st uuid; v_visible boolean; v_state text;
+begin
+  select derived_from into v_src from statements where id = pg_temp.id('st_a');
+  select supersede_memory(v_src, 'superseding content for suite52', 'human_direct',
+                          'suite52:supersede', pg_temp.id('owner'), 'suite52 B3 limit check')
+    into v_st;
+  select statement_visible_to(pg_temp.id('st_a'), pg_temp.id('owner')) into v_visible;
+  select state into v_state from statement_state(pg_temp.id('st_a'));
+  insert into t_result values (12,
+    'KNOWN LIMIT: a statement from a superseded source is still visible',
+    v_visible is true and v_state like 'source_%',
+    'visible=' || coalesce(v_visible::text,'NULL') || ' state=' || coalesce(v_state,'NULL')
+    || ' -- if this fails because visible=false, the limit was closed: rewrite as a positive test');
+exception when others then
+  insert into t_result values (12,
+    'KNOWN LIMIT: a statement from a superseded source is still visible', false, SQLERRM);
+end $c$;
+
 insert into t_result
 select 99,'GUARD_no_null_assertions', coalesce(count(*)=0,false),
   count(*)::text||' assertion(s) evaluated to NULL'
