@@ -1,6 +1,6 @@
--- tests/31_consequential_domains.sql
+-- tests/61_consequential_domains.sql
 -- ADOPT: upstream sovereign-memory-core #44 (consequential domains).
--- Covers sql/31_consequential_domains.sql.
+-- Covers sql/61_consequential_domains.sql.
 --
 -- Run against a FRESH database (tests/replay_fresh_install.sh). Self-contained:
 -- creates its own principals and domain bindings, and rolls back.

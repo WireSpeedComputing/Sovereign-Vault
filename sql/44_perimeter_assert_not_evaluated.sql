@@ -1,8 +1,8 @@
 -- 49_perimeter_assert_not_evaluated.sql
 --
--- MIGRATION: 58
--- MIGRATION: 59
--- MIGRATION: 60
+-- MIGRATION: 58_perimeter_assert_not_evaluated_on_absent_roles
+-- MIGRATION: 59_perimeter_assert_fix_exception_columns
+-- MIGRATION: 60_perimeter_assert_restore_plus_not_evaluated
 --
 -- Three applied migrations, one file, deliberately. 58 and 59 were broken
 -- intermediate states and a fresh install must never apply them. Only the final
