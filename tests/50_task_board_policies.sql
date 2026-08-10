@@ -391,11 +391,15 @@ SELECT 'G','g4_board_and_acl_helpers_not_executable_by_authenticated',
        AND NOT has_function_privilege('authenticated','public.task_reference_readable(text,uuid,uuid)','EXECUTE'),
        'only the _as_request predicate is exposed';
 
+-- Migrated to perimeter_report() by migration 76: "zero violations" alone was
+-- satisfiable by a host where nothing could be checked. Both halves asserted.
 INSERT INTO t45.r
 SELECT 'G','g5_perimeter_clean',
-       count(*) = 0,
-       coalesce(string_agg(category||' '||object_name||' -> '||grantee, '; '), 'no findings')
-FROM perimeter_assert();
+       evaluation_status = 'evaluated' AND violation_count = 0,
+       'status=' || evaluation_status || ' violations=' ||
+       coalesce(violation_count::text,'NULL') || ' over ' ||
+       objects_examined::text || ' objects'
+FROM perimeter_report();
 
 -- ── SECTION C (continued): supersession removes the reference row ─────────
 -- Deliberately last: it mutates a referent every earlier count depends on.

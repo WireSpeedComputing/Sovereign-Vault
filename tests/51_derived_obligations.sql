@@ -561,15 +561,20 @@ DO $c$ BEGIN
                          'public.obligation_evidence']) AS tt(tb)),
     'tables created after migration 62 must not inherit TRUNCATE');
   -- ...and the destructive_grant category must not be reporting them either.
+  -- CATEGORY-FILTERED, so it keeps using the primitive -- but it is paired with
+  -- the evaluation status, because a category filter is the exact shape that
+  -- fails open: on a host missing the platform roles the primitive returns no
+  -- rows at all and this filter reports clean. Migration 76.
   INSERT INTO t VALUES ('F','f6_no_destructive_grant_findings_on_the_new_tables',
-    (SELECT count(*)=0 FROM perimeter_assert()
+    (SELECT evaluation_status='evaluated' FROM perimeter_report())
+    AND (SELECT count(*)=0 FROM perimeter_assert()
       WHERE category='destructive_grant'
         AND object_name IN ('obligation_rules','obligations','obligation_evidence')),
-    'the migration 62 checker sees nothing on these three');
+    'the migration 62 checker sees nothing on these three, on a host where it could look');
   INSERT INTO t VALUES ('F','f7_perimeter_clean',
-    (SELECT count(*)=0 FROM perimeter_assert()),
-    coalesce((SELECT string_agg(category||' '||object_name||' -> '||grantee,'; ') FROM perimeter_assert()),
-             'no findings'));
+    (SELECT evaluation_status='evaluated' AND violation_count=0 FROM perimeter_report()),
+    (SELECT 'status='||evaluation_status||' violations='||
+            coalesce(violation_count::text,'NULL') FROM perimeter_report()));
 EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('F','f1_rls_enabled_on_all_three_tables',false,SQLERRM); END $c$;
 
