@@ -99,6 +99,8 @@ fi
 TEST_DIR="$(cd "$(dirname "$0")" && pwd)"
 SUITE_FAILED=0
 SUITE_UNRESOLVED=0
+SUITE_SKIPPED=0
+SUITE_PASSED=0
 echo "== validation suite =="
 for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
   # Line-anchored, and only in the header. The first version grepped for the
@@ -106,8 +108,21 @@ for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
   # mechanism in a comment silently opted itself out and was never run --
   # which happened, to three new suites at once. A skip that can be triggered
   # by documentation is a skip nobody notices.
+  # ── A SKIP IS NOT A PASS EITHER ─────────────────────────────────────────
+  # This opt-out is still honoured, but it no longer buys a clean top line.
+  # Two suites sat behind it for months -- 03 (owner/visibility isolation over
+  # the boot surfaces) and 12 (six compliance regressions) -- and every replay
+  # printed SKIP for both and then REPLAY CLEAN with exit 0. Neither actually
+  # needed a deployment; one wanted three uuids substituted by hand and the
+  # other wanted seed data that sql/53 has since shipped. Both now provision
+  # their own fixtures and are scored.
+  #
+  # Counting skips into the same gate as unresolved suites means the next
+  # suite to declare the opt-out has to justify it to whoever reads the exit
+  # code, rather than disappearing behind a word that looks deliberate.
   if head -40 "$tf" | grep -qE '^-- REQUIRES-DEPLOYMENT(:|$)'; then
-    echo "  SKIP  $(basename "$tf") (declares REQUIRES-DEPLOYMENT)"
+    echo "  SKIP  $(basename "$tf") (declares REQUIRES-DEPLOYMENT -- NOT scored)"
+    SUITE_SKIPPED=$((SUITE_SKIPPED+1))
     continue
   fi
   if ! out=$(psql -d "$DB" -v ON_ERROR_STOP=1 -f "$tf" 2>&1); then
@@ -133,40 +148,29 @@ for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
     SUITE_FAILED=1
   elif echo "$out" | grep -q 'SUITE_RESULT: PASS'; then
     echo "  PASS  $(basename "$tf")"
+    SUITE_PASSED=$((SUITE_PASSED+1))
   else
-    # No verdict. Fall back to the legacy heuristic, but say so -- an
-    # unreliable check silently standing in for a reliable one is the failure
-    # this whole change is about.
-    if echo "$out" | grep -qE '\|[[:space:]]*f[[:space:]]*(\||$)'; then
-      echo "  FAIL  $(basename "$tf") (legacy heuristic, no SUITE_RESULT verdict)"
-      echo "$out" | grep -E '\|[[:space:]]*f[[:space:]]*(\||$)' | head -8 | sed 's/^/        /'
-      SUITE_FAILED=1
-    else
-      # ── UNRESOLVED IS NOT A PASS ────────────────────────────────────
-      # These files predate SUITE_RESULT and print human-readable results. The
-      # runner cannot read a verdict from them, so it used to print PASS? and
-      # move on -- leaving SUITE_FAILED untouched, so the run ended REPLAY CLEAN
-      # and exit 0 with three suites unread. WO-13 called this instance eight and
-      # asked that an unresolved suite not be able to produce a clean top-line
-      # verdict. It still could until now.
-      #
-      # Two changes. First, scan for the legacy failure marker, because
-      # 20_disease_claim_term_coverage.sql really does emit `*** FAIL ***` rows
-      # for live compliance gaps and nothing was reading them. Second, count the
-      # suite as UNRESOLVED, which blocks CLEAN below.
-      #
-      # The marker scan is a heuristic and heuristics are what got this wrong
-      # before. It is safe here only because it can no longer produce a clean
-      # run on its own: a false negative still leaves the suite UNRESOLVED.
-      if echo "$out" | grep -qE '\*\*\* FAIL \*\*\*'; then
-        echo "  FAIL  $(basename "$tf") (legacy marker: *** FAIL *** in output)"
-        echo "$out" | grep -E '\*\*\* FAIL \*\*\*' | head -3 | sed 's/^/        /'
-        SUITE_FAILED=1
-      else
-        echo "  UNRESOLVED  $(basename "$tf") (no SUITE_RESULT verdict -- cannot be scored)"
-        SUITE_UNRESOLVED=$((SUITE_UNRESOLVED+1))
-      fi
-    fi
+    # ── UNRESOLVED IS NOT A PASS, AND THERE IS NO LONGER A FALLBACK ────────
+    # There used to be two heuristics here: a scan for '| f |' in the formatted
+    # output, and a scan for the literal '*** FAIL ***'. Both are gone.
+    #
+    # They were removed rather than narrowed, on purpose. A heuristic that can
+    # score a suite is a heuristic that can EXCUSE a suite from stating its own
+    # verdict, and every unscored suite in this project's history got there by
+    # being tolerable to the runner. While a fallback existed, "no SUITE_RESULT"
+    # was a survivable condition; now it is a non-zero exit.
+    #
+    # Nothing is lost by deleting the '*** FAIL ***' scan:
+    # 20_disease_claim_term_coverage.sql is the only file that emits that
+    # marker, and its own derived verdict is computed from the same rows
+    # (`WHERE result <> 'PASS'`), so the signal is read by the file itself
+    # rather than inferred from its formatting by someone else.
+    #
+    # The '| f |' scan was wrong in both directions and is documented as such
+    # above: a NULL assertion prints a blank cell and read as a pass, and a
+    # suite printing legitimate boolean data columns read as a failure.
+    echo "  UNRESOLVED  $(basename "$tf") (no SUITE_RESULT verdict -- cannot be scored)"
+    SUITE_UNRESOLVED=$((SUITE_UNRESOLVED+1))
   fi
 done
 [ "$SUITE_FAILED" -ne 0 ] && { echo "VALIDATION SUITE FAILED"; exit 1; }
@@ -175,17 +179,21 @@ done
 # pass; reporting it as either is how this went unnoticed. "Everything that
 # could be scored passed" is a different claim from "everything passed", and the
 # top line must not make the second claim while the second is unknown.
-if [ "$SUITE_UNRESOLVED" -ne 0 ]; then
+if [ "$SUITE_UNRESOLVED" -ne 0 ] || [ "$SUITE_SKIPPED" -ne 0 ]; then
   echo
-  echo "REPLAY INCOMPLETE -- $SUITE_UNRESOLVED suite(s) could not be scored."
+  echo "REPLAY INCOMPLETE -- $SUITE_UNRESOLVED unscored, $SUITE_SKIPPED skipped, $SUITE_PASSED passed."
   echo "Every suite that COULD be scored passed. That is not the same as a clean"
   echo "replay, and this line exists so the difference is visible. Give the"
-  echo "unresolved suites a derived SUITE_RESULT line."
+  echo "unresolved suites a derived SUITE_RESULT line, and justify or remove any"
+  echo "REQUIRES-DEPLOYMENT opt-out."
   exit 2
 fi
 
 echo
-echo "REPLAY CLEAN."
+# The count is printed on the CLEAN line deliberately. "REPLAY CLEAN" on its own
+# is true of a run that scored twenty-five suites and of a run that scored none;
+# this project has shipped both and could not tell them apart from the top line.
+echo "REPLAY CLEAN -- $SUITE_PASSED suite(s) scored, 0 unresolved, 0 skipped."
 echo "NOTE: a local replay cannot prove cloud-host default-privilege behavior"
 echo "on newly created objects, nor extension placement. Those still require"
 echo "validation against a real hosted project."
