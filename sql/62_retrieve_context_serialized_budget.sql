@@ -1,8 +1,8 @@
--- 52_retrieve_context_serialized_budget.sql
+-- 62_retrieve_context_serialized_budget.sql
 --
--- MIGRATION: 70
--- MIGRATION: 71
--- MIGRATION: 72
+-- MIGRATION: 70_retrieve_context_serialized_budget
+-- MIGRATION: 71_retrieve_context_envelope_floor
+-- MIGRATION: 72_retrieve_context_budget_self_check
 --
 -- Three applied migrations, one file. 70 and 71 were partial fixes that each
 -- left a boundary violating; only the body below is correct and a fresh install

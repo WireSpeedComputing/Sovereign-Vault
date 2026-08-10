@@ -1,6 +1,6 @@
 -- 50_authorization_audit_judged_by.sql
 --
--- MIGRATION: 64
+-- MIGRATION: 64_authorization_audit_judged_by
 --
 -- record_authorization_audit could not express who made the judgement.
 --

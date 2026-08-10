@@ -1,4 +1,4 @@
--- 51_domain_owner_visibility_parity.sql
+-- 63_domain_owner_visibility_parity.sql
 --
 -- Turns an instruction into a mechanism.
 --

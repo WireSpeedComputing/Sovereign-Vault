@@ -1,6 +1,6 @@
 -- 48_custody_field_locks_wiki_pages.sql
 --
--- MIGRATION: 57
+-- MIGRATION: 57_custody_field_locks_wiki_pages
 --
 -- Extends chain-of-custody field locking to wiki_pages, closing an asymmetry
 -- flagged in the memories lock but not acted on at the time: 1 custody trigger

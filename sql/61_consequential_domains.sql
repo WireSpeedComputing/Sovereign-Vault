@@ -1,4 +1,4 @@
--- 31_consequential_domains.sql
+-- 61_consequential_domains.sql
 --
 -- MIGRATION: 56_consequential_domains
 --
@@ -9,7 +9,7 @@
 --
 -- ADOPT: upstream sovereign-memory-core #44 — declared consequential domains.
 
--- the negative suite in tests/31_consequential_domains.sql can only be shown
+-- the negative suite in tests/61_consequential_domains.sql can only be shown
 -- green by a replay that includes it. STATUS.md records that the deployment
 -- does not have this.
 --
