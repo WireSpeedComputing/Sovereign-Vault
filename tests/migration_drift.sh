@@ -174,10 +174,32 @@ fi
 #
 # If body coverage CANNOT be established, that is a FAILURE, not a skip. A skip
 # here would restore precisely the blindness this section was added to remove.
-# No default path. The location of the private migrations repository is
-# deployment data and does not belong in a public repo -- the same reason the
-# secret sweep itself lives outside this repository. Set BODIES_REPO in your
-# environment. Unset means "cannot verify", which is a failure below, not a skip.
+#
+# DISCOVERED, NOT NAMED. The location of the private migrations repository is
+# deployment data and must not appear in a public repo -- the same reason the
+# secret sweep lives outside this one. So the default is found by looking for a
+# sibling directory carrying a MANIFEST.tsv with the expected header, rather than
+# by hardcoding a repository name.
+#
+# WHY A DEFAULT AT ALL. This gate was unset for its entire life, so it always
+# printed CANNOT VERIFY -- honest about being unable to run, and read as fine.
+# Three separate body decays went unnoticed underneath it, each caught later by a
+# human noticing rather than by the check built to catch exactly that. A gate
+# that declares itself off is still a gate nobody runs.
+#
+# The default is a convenience, not a weakening: if no sibling manifest is found
+# the CANNOT VERIFY failure below still fires. An explicit BODIES_REPO overrides.
+if [ -z "${BODIES_REPO:-}" ]; then
+  _siblings="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"
+  if [ -n "$_siblings" ]; then
+    for _cand in "$_siblings"/*/; do
+      [ -f "${_cand}MANIFEST.tsv" ] || continue
+      head -1 "${_cand}MANIFEST.tsv" 2>/dev/null | grep -q 'sha256' || continue
+      BODIES_REPO="${_cand%/}"
+      break
+    done
+  fi
+fi
 BODIES_REPO="${BODIES_REPO:-}"
 BODY_DRIFT=0
 echo "== migration bodies stored outside the hosted database =="
