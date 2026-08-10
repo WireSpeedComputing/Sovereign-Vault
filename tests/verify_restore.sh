@@ -15,7 +15,7 @@
 #   E  provenance                basis presence, citation where required
 #   F  supersession chains       lineage, depth, and terminal status
 #   G  attention / hot index     staging and index integrity, FK reachability
-#   H  perimeter_assert()        zero findings
+#   H  perimeter_report()        evaluated, zero violations
 #   I  migration drift           the executable inventory check, in the restore
 #   J  DEFINITION EQUIVALENCE    the one that name-equality could not do
 #   K  conformance probes        positive/negative/conflict/stale/evidence
@@ -306,18 +306,25 @@ fi
 # ══════════════════════════════════════════════════════════════════════════
 # H — perimeter
 # ══════════════════════════════════════════════════════════════════════════
-echo "-- H perimeter_assert() --"
-PERIM=$(Q -c "select count(*) from perimeter_assert();")
+echo "-- H perimeter_report() --"
+# Migrated from `count(*) from perimeter_assert()` by migration 76. The
+# primitive returns zero rows on a host that is missing the platform roles,
+# because its filters match nothing -- so a zero there meant NOT CHECKED and
+# read as clean. The report separates the two questions.
+PERIM_STATUS=$(Q -c "select evaluation_status from perimeter_report();")
+PERIM=$(Q -c "select coalesce(violation_count::text,'NULL') from perimeter_report();")
 NORLS=$(Q -c "select coalesce(string_agg(c.relname,', '),'') from pg_class c
               join pg_namespace n on n.oid=c.relnamespace
               where n.nspname='public' and c.relkind='r' and not c.relrowsecurity
                 and not exists (select 1 from pg_depend d where d.objid=c.oid and d.deptype='e');")
-if [ "$PERIM" = "0" ] && [ -z "$NORLS" ]; then
-  ok "H perimeter clean: 0 findings, every repo-owned public table has RLS enabled"
+if [ "$PERIM_STATUS" = "evaluated" ] && [ "$PERIM" = "0" ] && [ -z "$NORLS" ]; then
+  ok "H perimeter clean: evaluated, 0 findings, every repo-owned public table has RLS enabled"
   note "LIMIT: vanilla PostgreSQL does not apply Supabase's default grants to"
   note "anon/authenticated, so a local zero is weaker evidence than a hosted zero."
 else
-  if [ -n "$NORLS" ] && [ "$PERIM" = "0" ]; then
+  if [ "$PERIM_STATUS" != "evaluated" ]; then
+    bad "H perimeter could NOT be evaluated (status=$PERIM_STATUS) -- this is not a clean result"
+  elif [ -n "$NORLS" ] && [ "$PERIM" = "0" ]; then
     bad "H row level security is DISABLED on repo-owned public table(s)"
   else
     bad "H perimeter findings after restore: $PERIM finding(s)"

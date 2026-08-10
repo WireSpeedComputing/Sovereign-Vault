@@ -70,6 +70,16 @@ returns table(category text, object_schema text, object_name text,
               grantee text, privilege text)
 language sql stable as $$ select null::text, null::text, null::text,
                                  null::text, null::text where false $$;
+-- The runner gates on perimeter_report() as of migration 76, so the minimal
+-- schema has to provide it. Default: evaluated, zero violations.
+create function perimeter_report()
+returns table(evaluation_status text, expected_roles text[], roles_present text[],
+              roles_missing text[], categories_checked text[], objects_examined int,
+              violation_count int, checker_version text, violations jsonb)
+language sql stable as $$
+  select 'evaluated'::text, '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[],
+         1::int, (select count(*)::int from perimeter_assert()),
+         'stub'::text, '[]'::jsonb $$;
 SQL
 
 mk_suite() { printf '%s\n' "$2" > "$A/tests/$1"; }
@@ -144,10 +154,20 @@ read -r c t ec <<< "$(run_A 1 'REPLAY APPLIED BUT VERIFICATION FAILED' A7)"
 record "replay runner" "table created without RLS" "$c" "$t" "exit=$ec"
 cp "$WORK/00_minimal.bak" "$A/sql/00_minimal.sql"
 
-# A8 -- perimeter_assert returning a violation
+# A8 -- a real perimeter violation
 sed -i.bak 's/where false/where true/' "$A/sql/00_minimal.sql"
 read -r c t ec <<< "$(run_A 1 'REPLAY APPLIED BUT VERIFICATION FAILED' A8)"
-record "replay runner" "perimeter_assert returns a row" "$c" "$t" "exit=$ec"
+record "replay runner" "perimeter reports a violation" "$c" "$t" "exit=$ec"
+cp "$WORK/00_minimal.bak" "$A/sql/00_minimal.sql"
+
+# A9 -- THE MIGRATION 76 CASE. The perimeter could not be evaluated: status is
+# not_evaluated and violation_count is NULL. Before migration 76 the runner
+# counted rows from the primitive, which returns ZERO on such a host, and this
+# case read as clean. It must now fail.
+sed -i.bak "s/'evaluated'::text/'not_evaluated'::text/; s/(select count(\*)::int from perimeter_assert())/null::int/" \
+  "$A/sql/00_minimal.sql"
+read -r c t ec <<< "$(run_A 1 'REPLAY APPLIED BUT VERIFICATION FAILED' A9)"
+record "replay runner" "perimeter NOT EVALUATED (was a silent pass pre-76)" "$c" "$t" "exit=$ec"
 cp "$WORK/00_minimal.bak" "$A/sql/00_minimal.sql"
 
 # ══════════════════════════════════════════════════════════════════════════

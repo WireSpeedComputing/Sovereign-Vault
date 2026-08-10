@@ -134,7 +134,10 @@ name-matching audit missed a real RLS gap that only a content grep caught.
 3. Register your own principals (`docs/02-onboarding-principals.md` has the
    template) — do not skip this and use only the service-role key for
    everything, or multi-user is cosmetic.
-4. Run `select * from perimeter_assert();` and confirm it returns zero rows
+4. Run `select evaluation_status, violation_count from perimeter_report();` and
+   confirm it reads `evaluated` with `violation_count = 0`. Do NOT gate on
+   `perimeter_assert()` — it is violation detail and returns zero rows on a host
+   where nothing could be checked (migration 76)
    for anything you didn't explicitly intend.
 5. Add your domain tables following `docs/01-architecture.md`.
 

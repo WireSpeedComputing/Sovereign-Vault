@@ -64,8 +64,16 @@ done
 [ "$FAILED" -ne 0 ] && { echo "REPLAY FAILED"; exit 1; }
 
 echo "== post-replay verification =="
-PERIM=$(psql -d "$DB" -t -A -c "select count(*) from perimeter_assert();")
-echo "  perimeter_assert findings (want 0): $PERIM"
+# ── GATE ON THE REPORT, NEVER ON THE PRIMITIVE ────────────────────────────
+# This line used to read `select count(*) from perimeter_assert()`. On a host
+# missing the platform roles every filter in that function matches nothing, so
+# it returns zero and this check read NOT CHECKED as clean. Migration 76 moved
+# the status out of the violation set; the gate now requires BOTH that the
+# perimeter could be evaluated and that it found nothing.
+PERIM_STATUS=$(psql -d "$DB" -t -A -c "select evaluation_status from perimeter_report();")
+PERIM=$(psql -d "$DB" -t -A -c "select coalesce(violation_count::text,'NULL') from perimeter_report();")
+PERIM_OBJ=$(psql -d "$DB" -t -A -c "select objects_examined from perimeter_report();")
+echo "  perimeter_report: status=$PERIM_STATUS violations=$PERIM (want 0) over $PERIM_OBJ objects"
 
 NORLS=$(psql -d "$DB" -t -A -c "select coalesce(string_agg(c.relname,', '),'(none)') from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and not c.relrowsecurity;")
 echo "  tables missing RLS (want none): $NORLS"
@@ -76,7 +84,9 @@ psql -d "$DB" -t -A -c "select string_agg(p.proname,',' order by p.proname) from
 echo "  tables with rows after replay (expect only schema_changelog, provenance_registry, perimeter_exception):"
 psql -d "$DB" -t -A -c "select coalesce(string_agg(relname||'='||n_live_tup,', '),'(all empty)') from pg_stat_user_tables where n_live_tup>0;" | sed 's/^/    /'
 
-if [ "$PERIM" != "0" ] || [ "$NORLS" != "(none)" ]; then
+if [ "$PERIM_STATUS" != "evaluated" ] || [ "$PERIM" != "0" ] || [ "$NORLS" != "(none)" ]; then
+  [ "$PERIM_STATUS" != "evaluated" ] && \
+    echo "  ^^ perimeter could NOT be evaluated on this host (status=$PERIM_STATUS)."
   echo "REPLAY APPLIED BUT VERIFICATION FAILED"
   exit 1
 fi

@@ -115,6 +115,50 @@ Two deployment migrations are named `36` (distinct versions, colliding names):
 `36_vault_auth_binding_fk_indexes` is folded into `sql/23`,
 `36_retrieval_embedding_backlog` is `sql/29`.
 
+## Migration 76 — perimeter_report, and every counting caller migrated (2026-08-10)
+
+`sql/61_perimeter_report.sql`. WO-18 Task 2. Implements the reviewed design.
+
+`perimeter_assert()` is **restored to violation-only**. Migration 44 had it emit
+a `not_evaluated` ROW inside a result set whose contract is "these are
+violations", so `count(*)` returned 1 for "nothing was checked" and 1 for "one
+real violation", and any caller filtering by category read an unevaluated host
+as clean.
+
+`perimeter_report()` is now the **sanctioned entry point**: one row carrying
+`evaluation_status`, `expected_roles`, `roles_present`, `roles_missing`,
+`categories_checked`, `objects_examined`, `violation_count`, `checker_version`
+and the violation rows as `violations` jsonb.
+
+Gate on `evaluation_status = 'evaluated' AND violation_count = 0`, never on the
+count alone. On a host missing a platform role, `violation_count` is **NULL, not
+0** — the only value that fails closed, because `NULL = 0` is NULL.
+
+**Callers migrated in the same change** (restoring the primitive without this
+would have reinstated the original fail-open verbatim):
+
+| caller | was | now |
+|---|---|---|
+| `tests/replay_fresh_install.sh` | `count(*) from perimeter_assert()` | `perimeter_report()`, status + count |
+| `tests/verify_restore.sh` check H | `count(*) from perimeter_assert()` | `perimeter_report()`, status + count |
+| `tests/50_task_board_policies.sql` g5 | `count(*) = 0` | status + count |
+| `tests/51_derived_obligations.sql` f7 | `count(*) = 0` | status + count |
+| `tests/51_derived_obligations.sql` f6 | category-filtered primitive | primitive **paired with** evaluation status |
+| `README.md` step 4 | `select * from perimeter_assert()` | `perimeter_report()` |
+
+`tests/46_truncate_revocation.sql` deliberately still uses the primitive: it
+asserts that a specific deliberate exposure is *reported*, which is violation
+detail, not a gate.
+
+Proof: `tests/58_perimeter_report.sql`, 14 assertions. Section B introduces a
+real grant, proves it is counted, removes it, proves the count returns to zero.
+Section C renames a platform role inside the transaction to reach the
+`not_evaluated` branch — the branch that motivated the whole disagreement and
+the one a parity host cannot exercise — and asserts `violation_count IS NULL`
+and that the gate expression is NOT TRUE.
+
+Replay: 28 suites scored, 0 unresolved, 0 skipped, exit 0.
+
 ## perimeter_assert was crying wolf on the deployment — FIXED, NOT YET APPLIED (2026-08-07)
 
 `sql/28_perimeter_assert_signal.sql`. Found while reconciling migration 38.
