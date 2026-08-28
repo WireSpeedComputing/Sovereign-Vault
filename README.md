@@ -97,6 +97,8 @@ docs/01-architecture.md      concepts, "bring your own schema" contract for
 docs/02-onboarding-principals.md   template for registering humans and agents
                               with scoped capabilities (placeholders only —
                               your real roster is data, not repo content)
+docs/03-program-context.md    role, dependency direction, adjacent repositories,
+                              current identity blocker, and claim limits
 ```
 
 Note: file numbering here is cumulative-by-topic and does not map 1:1 to a
