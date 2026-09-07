@@ -1,15 +1,19 @@
 # Sovereign Vault
 
+Maintained as part of the WIRE SPEED COMPUTING LLC program led by Jesse Ryski.
+[Website](https://www.wirespeedcomputers.com/) |
+[Program guide](https://github.com/WireSpeedComputing/sovereign-ai-os).
+Existing license terms and contributor rights are unchanged.
+
 A self-hosted knowledge and operations backend for AI-heavy businesses, built
-on plain Postgres. Facts, decisions, and operational state live in a database
-the business owns outright — not inside Claude, ChatGPT, or any vendor's
-memory silo. Any authorized model or application is a client, never an owner.
+on plain Postgres. Facts, decisions, and operational state are intended to live in a database
+the business controls, separate from any model provider's memory store. Any authorized model or application is a client, never an owner.
 
 This is the multi-user business counterpart to
 [jryski/sovereign-memory-core](https://github.com/jryski/sovereign-memory-core),
-a personal single-principal knowledge layer. See `LINEAGE.md` for exactly what
+the PostgreSQL memory reference implementation. See `LINEAGE.md` for exactly what
 was adopted, adapted, or intentionally left out. **This is a new repo, not a
-fork** — the two are expected to diverge permanently. Personal and business
+fork**: the two are expected to diverge permanently. Personal and business
 have different trust models and should not chase feature parity.
 
 ## The rule this repo lives by
@@ -18,21 +22,21 @@ have different trust models and should not chase feature parity.
 enforcement functions, docs, and templates. It never contains principals,
 grants, scopes, incidents, personnel facts, project identifiers, or anything
 else describing a real deployment. If you're about to commit a real person's
-name or a real project reference, you're holding data — put it in the
+name or a real project reference, you're holding data: put it in the
 database the schema exists to create.
 
 ## Why this exists
 
 1. **Data sovereignty.** Facts live in a database you control, exportable as
-   plain SQL and JSON. Switching AI vendors is a config change, not a
-   migration crisis.
+   plain SQL and JSON. The design aims to make AI providers replaceable;
+   export and recovery still need evidence for each deployment.
 2. **Best tool for the job.** Any authorized model or application with a safe
    Postgres path reads and writes the same store.
 3. **Verifiable source of truth.** Every fact carries provenance. Consequential
    tables reject unsourced writes at the database level, not by agent
    discipline. Corrections supersede; nothing is silently rewritten.
 4. **Multiple humans, multiple agents, one boundary.** Principals and
-   capability grants make "who can do what" an explicit, reviewable row —
+   capability grants make "who can do what" an explicit, reviewable row,
    never implied by role or team membership.
 
 ## Status
@@ -41,7 +45,7 @@ Applied and validated against both vanilla PostgreSQL 16 and a real Supabase
 project running PostgreSQL 17. All Phase 1 acceptance tests plus the
 import-framework tests pass on both. The domain-layer example, compliance
 scanning, promotion/rejection governance, and owner-scoped boot surfaces are
-also applied and tested — see `STATUS.md`, which is the authoritative
+also applied and tested: see `STATUS.md`, which is the authoritative
 record and lists every defect found and fixed along the way.
 
 **Read `STATUS.md`'s "Known open risks" before trusting this with real
@@ -95,14 +99,14 @@ tests/                       isolation and compliance regression tests, meant
 docs/01-architecture.md      concepts, "bring your own schema" contract for
                               domain tables, temporal/supersede pattern template
 docs/02-onboarding-principals.md   template for registering humans and agents
-                              with scoped capabilities (placeholders only —
+                              with scoped capabilities (placeholders only,
                               your real roster is data, not repo content)
 ```
 
 Note: file numbering here is cumulative-by-topic and does not map 1:1 to a
 deployment's applied-migration numbering. Several live fix-migrations are
 folded into the file they correct rather than committed one-per-migration.
-Verify a deployment against these files by content, not by name — a
+Verify a deployment against these files by content, not by name: a
 name-matching audit missed a real RLS gap that only a content grep caught.
 
 ## What's deliberately NOT here
@@ -111,7 +115,7 @@ name-matching audit missed a real RLS gap that only a content grep caught.
   personnel history. See "The rule this repo lives by."
 - No domain tables (products, orders, suppliers, whatever your business
   tracks). Those are yours to add, following the contract in
-  `docs/01-architecture.md` — temporal columns, a `supersede_*()` function
+  `docs/01-architecture.md`: temporal columns, a `supersede_*()` function
   instead of direct UPDATE, and registration in `provenance_registry` if the
   table is consequential.
 - No RAG framework, no agent framework, no UI. This is a data layer with
@@ -122,10 +126,10 @@ name-matching audit missed a real RLS gap that only a content grep caught.
 
 1. Create a Supabase project or vanilla Postgres 15+ database.
 2. Run `sql/00_extensions.sql` through `sql/19_schema_changelog_rls.sql` in
-   numeric order. `sql/10`–`sql/12` are an example domain module — skip or
+   numeric order. `sql/10`–`sql/12` are an example domain module: skip or
    replace them with your own domain schema.
 3. Register your own principals (`docs/02-onboarding-principals.md` has the
-   template) — do not skip this and use only the service-role key for
+   template): do not skip this and use only the service-role key for
    everything, or multi-user is cosmetic.
 4. Run `select * from perimeter_assert();` and confirm it returns zero rows
    for anything you didn't explicitly intend.
@@ -137,5 +141,5 @@ Extracted from a live multi-user business deployment and genericized.
 Architecture partly derived from
 [jryski/sovereign-memory-core](https://github.com/jryski/sovereign-memory-core)'s
 published design (see LINEAGE.md). Use freely. No warranty. Read
-`docs/01-architecture.md` — especially the open question at the end —
+`docs/01-architecture.md`: especially the open question at the end,
 before putting anything sensitive in it.
