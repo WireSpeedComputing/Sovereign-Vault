@@ -50,6 +50,12 @@ connection, the human-gated governance functions are accident-prevention and
 audit, not identity enforcement. Per-principal connection identity does not
 exist yet.
 
+For the next implementation pass, use the
+[user-scoped MCP handoff](docs/03-user-scoped-mcp-handoff.md): verified identity,
+business-specific access mapping, one bounded read pilot, independent review,
+and deployment-specific recovery gates. This is guidance, not an applied
+authorization rollout. See [SECURITY.md](SECURITY.md) for private reporting.
+
 ## Repo map
 
 ```
@@ -121,7 +127,7 @@ name-matching audit missed a real RLS gap that only a content grep caught.
 ## Quick start
 
 1. Create a Supabase project or vanilla Postgres 15+ database.
-2. Run `sql/00_extensions.sql` through `sql/19_schema_changelog_rls.sql` in
+2. Run `sql/00_extensions.sql` through `sql/22_wiki_pages_source_agent_parity.sql` in
    numeric order. `sql/10`–`sql/12` are an example domain module — skip or
    replace them with your own domain schema.
 3. Register your own principals (`docs/02-onboarding-principals.md` has the
