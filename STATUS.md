@@ -1,12 +1,450 @@
 # STATUS
 
-Last updated: 2026-07-29. Most recent work: "Governed retrieval, Phase C", "Transition concurrency + actor custody", "Fresh-install replay", and
-"Disease-claim false negative" below. The replay is reproducible — run
+Last updated: 2026-08-07. Most recent work: "Propose-then-promote", "Retrieval
+projection", "Wiki supersession", "Identity and capability enforcement",
+"Governed retrieval, Phase C" and "Transition concurrency + actor custody"
+below. The replay is reproducible — run
 `tests/replay_fresh_install.sh` rather than trusting this file. Phase 0 and Phase 1 SQL were applied to a real PostgreSQL 16
 instance (Ubuntu, pgvector 0.6.0) and all 8 Phase 1 acceptance tests were
 executed for real, not just reasoned about. Results below. This was NOT
 tested against Supabase at that time — see "Not yet tested" (2026-07-08
 version), now superseded by the Postgres 17 / Supabase validation below.
+
+## Scope-bound authority — BUILT, NOT YET APPLIED (2026-08-07)
+
+`sql/30_scope_bound_authority.sql`, `tests/30_scope_bound_authority.sql` (19
+assertions, all passing), `docs/05-scope-bound-authority.md`, and
+`pending/D_scope_hierarchy.sql` with a 14-case matrix. ADOPT, upstream #45.
+Designed against the deployed `vault_auth` layer; modifies none of it.
+
+**FINDING: the capability model is not wired to anything.** Nothing in this repo
+calls `has_capability()` or `request_has_capability()` — not one RLS policy, not
+one function, not one view. The authority model is decorative today: a
+well-built lock with no door in the frame.
+
+This is the same shape as the #46 finding. `promote_memory()` looked like a
+chokepoint and was a convenience wrapper; `has_capability()` looks like an
+authorization boundary and is an unreferenced function. `scope_authority_report()`
+reports `enforced = false` for every scope, hardcoded, because reporting
+anything else would be a lie.
+
+Wiring it is a design decision, not a coding task, because `retrieve_context()`
+already filters on owner/visibility. Three options and a recommendation are in
+`docs/05`; the recommended one (scope narrows visibility) fails closed and can
+roll out scope by scope. It also forces a deliberate choice about rows whose
+`workstream` is null, which would otherwise become unreachable to everyone.
+
+**Scope representation.** `<kind>:<identifier>` with kinds
+`workstream|table|record|domain`. There is deliberately **no global kind** — the
+cleanest way to guarantee "never global by default" is for the type system to
+have no way to express it. `scope_registry` must declare a scope before it can
+be granted, enforced by a foreign key from `capability_grants`.
+
+The registry exists because `resource_scope` was free text: a grant on
+`workstream:brnad` inserts cleanly, reads back cleanly, appears in every audit
+view, and authorises nothing. Silent fail-closed is still a defect — the
+operator believes authority was granted. This deployment lost time to exactly
+this failure one layer over, with `issuer='supabase_auth'` written as a label
+instead of the literal `iss` URL.
+
+**Wildcard semantics: decided here, shipped separately**, honouring the prior
+identity review's requirement. Pattern wildcards REJECTED — a pattern grant is
+authority over scopes that do not exist yet, so anything a future operator names
+under that prefix is covered by a grant nobody re-reviewed, and "who can read
+this scope?" stops being answerable as a query. Declared containment CHOSEN:
+scopes form a tree, an ancestor reaches descendants only if it declares
+`confers_descendants`, resolution is over rows rather than patterns, and
+`scope_effective_grants()` names the route for each principal.
+
+Known surprise, documented and pinned as `m03`: `confers_descendants` says what a
+scope does when GRANTED, not whether it transmits when TRAVERSED. Setting it
+false on an intermediate does not seal a subtree.
+
+**Cutover.** `scope_cutover` + `declare_scope_cutover()` declare the vault
+authoritative for a named scope, replacing a prior source — a different question
+from `import_cutover_scorecard`, which is about a source being accounted for.
+
+**A bug the tests caught:** the first draft keyed `scope_cutover` on
+`(scope, declared_at)`. `now()` is transaction time, so two declarations in one
+transaction collided on an identical timestamp while two a second apart — the
+actually-wrong case — were both accepted. Replaced with a surrogate key plus a
+partial unique index on the real invariant: at most one live declaration per
+scope. Timestamps make bad keys.
+
+**Live-testing context folded into the docs:** the identity layer is proven end
+to end (two Auth users over PostgREST, granted returned true, ungranted returned
+false). `issuer` must be the literal `iss` URL. Password-auth tokens carry no
+`client_id`, so the agent half of the intersection model needs an OAuth/MCP
+client flow and cannot be exercised through password auth. Tokens carry
+`session_id`, not `jti`, so per-token revocation must key on `session_id`.
+
+## Migration drift check — BUILT (2026-08-07)
+
+`tests/migration_drift.sh` + `tests/migration_baseline.txt`. Part of upstream
+#58's executable drift inventory.
+
+Three times an applied migration had no repo file: Migrations A and B (existed
+only in a chat transcript) and `36_retrieval_embedding_backlog` (applied via
+`apply_migration`, never filed). Each was caught by a human noticing.
+
+The third was the expensive kind. `retrieval_embedding_backlog()` is the RPC the
+deployed `embed-retrieval-units` edge function calls, so a fresh install from
+this repo produced a database where that function returned 500 on a missing RPC
+— while the schema replayed clean and nothing said the pipeline was broken. Now
+filed as `sql/29_retrieval_embedding_backlog.sql`, transcribed from
+`pg_get_functiondef()`.
+
+The check takes the applied inventory as a file rather than connecting itself: a
+drift checker holding production credentials is a bigger risk than the drift.
+
+**Baseline at `20260729174800`.** The historical mapping onto `sql/00-21` is
+many-to-one and was never recorded; reconstructing it from migration *names*
+would be a guess presented as an inventory. Declaring history out of scope in one
+visible place beats emitting thirty-five reconstructed false positives, which is
+how a checker gets muted. Lowering the baseline is progress; raising it is how a
+check quietly stops checking.
+
+**Verified it can fail, both directions:** deleting `sql/29`'s `MIGRATION:`
+header reported applied-but-uncommitted; removing migration 38 from the
+inventory reported committed-but-unapplied.
+
+Honest limit: inventory only. A repo file whose body has drifted from the
+applied object still reads clean. That is the restore-verification half of #58.
+
+Two deployment migrations are named `36` (distinct versions, colliding names):
+`36_vault_auth_binding_fk_indexes` is folded into `sql/23`,
+`36_retrieval_embedding_backlog` is `sql/29`.
+
+## Migration 76 — perimeter_report, and every counting caller migrated (2026-08-10)
+
+`sql/61_perimeter_report.sql`. WO-18 Task 2. Implements the reviewed design.
+
+`perimeter_assert()` is **restored to violation-only**. Migration 44 had it emit
+a `not_evaluated` ROW inside a result set whose contract is "these are
+violations", so `count(*)` returned 1 for "nothing was checked" and 1 for "one
+real violation", and any caller filtering by category read an unevaluated host
+as clean.
+
+`perimeter_report()` is now the **sanctioned entry point**: one row carrying
+`evaluation_status`, `expected_roles`, `roles_present`, `roles_missing`,
+`categories_checked`, `objects_examined`, `violation_count`, `checker_version`
+and the violation rows as `violations` jsonb.
+
+Gate on `evaluation_status = 'evaluated' AND violation_count = 0`, never on the
+count alone. On a host missing a platform role, `violation_count` is **NULL, not
+0** — the only value that fails closed, because `NULL = 0` is NULL.
+
+**Callers migrated in the same change** (restoring the primitive without this
+would have reinstated the original fail-open verbatim):
+
+| caller | was | now |
+|---|---|---|
+| `tests/replay_fresh_install.sh` | `count(*) from perimeter_assert()` | `perimeter_report()`, status + count |
+| `tests/verify_restore.sh` check H | `count(*) from perimeter_assert()` | `perimeter_report()`, status + count |
+| `tests/50_task_board_policies.sql` g5 | `count(*) = 0` | status + count |
+| `tests/51_derived_obligations.sql` f7 | `count(*) = 0` | status + count |
+| `tests/51_derived_obligations.sql` f6 | category-filtered primitive | primitive **paired with** evaluation status |
+| `README.md` step 4 | `select * from perimeter_assert()` | `perimeter_report()` |
+
+`tests/46_truncate_revocation.sql` deliberately still uses the primitive: it
+asserts that a specific deliberate exposure is *reported*, which is violation
+detail, not a gate.
+
+Proof: `tests/58_perimeter_report.sql`, 14 assertions. Section B introduces a
+real grant, proves it is counted, removes it, proves the count returns to zero.
+Section C renames a platform role inside the transaction to reach the
+`not_evaluated` branch — the branch that motivated the whole disagreement and
+the one a parity host cannot exercise — and asserts `violation_count IS NULL`
+and that the gate expression is NOT TRUE.
+
+Replay: 28 suites scored, 0 unresolved, 0 skipped, exit 0.
+
+## perimeter_assert was crying wolf on the deployment — FIXED, NOT YET APPLIED (2026-08-07)
+
+`sql/28_perimeter_assert_signal.sql`. Found while reconciling migration 38.
+
+Run against the deployment, `perimeter_assert()` returned close to **two hundred
+rows**. All but one were pgvector extension internals — `vector_add`,
+`halfvec_cmp`, `l2_distance`, `sparsevec_out` and their kin — granted EXECUTE to
+`anon` and `authenticated`. Supabase applies those grants when the extension is
+installed. They are not a decision this schema made, not a perimeter it
+controls, and revoking them would break the vector type for every legitimate
+caller.
+
+A local replay showed **zero** of these, because vanilla PostgreSQL does not
+apply those default grants. So the check passed locally and was unusable in the
+one environment it exists to protect — and the noise is why nobody noticed.
+
+This repo already learned this exact lesson in `rule0-sweep.sh`, where a
+case-insensitive pattern list matched shell builtins and the fix was to split
+the patterns rather than keep a checker nobody could act on. "A checker that
+cries wolf gets ignored." Same failure, different tool.
+
+Fixed by excluding extension-owned objects (`pg_depend deptype='e'` — the same
+line `replay_fresh_install.sh` already draws for "repo-owned functions") and by
+moving deliberate exposures into a declared `perimeter_exception` table with a
+reason, rather than hardcoding them into the function body where they become
+indistinguishable from bugs. `perimeter_exceptions_review()` reports whether
+each declared exception is still present, so a stale one can be removed instead
+of silently pre-authorising a future re-grant.
+
+One exception is seeded: `public.request_has_capability` to `authenticated`,
+which is the deliberate API entry point from migration 38.
+
+`perimeter_assert()`'s return signature is deliberately UNCHANGED — `sql/27`
+already changes one public signature in this batch, and each such change
+invalidates operating instructions elsewhere (upstream #70).
+
+## Public request_has_capability wrapper — APPLIED (2026-08-07)
+
+`sql/25_public_request_has_capability.sql`, deployment migration 38.
+Transcribed from the applied definition read back with `pg_get_functiondef()`,
+not retyped from a description.
+
+Grants and PostgREST reachability are independent: `sql/23` grants EXECUTE on
+`vault_auth.request_has_capability` to `authenticated`, but PostgREST only
+exposes configured Data API schemas and `vault_auth` is deliberately not one.
+The inner function was granted and unreachable at once. This wrapper is the
+reachable entry point.
+
+**`SECURITY INVOKER` is load-bearing here, not an oversight.** It adds no
+privilege (the caller already holds USAGE and EXECUTE on the inner function),
+and it preserves `session_user`, which `vault_auth._trusted_request_claims()`
+uses to distinguish a genuine PostgREST request from an administrative session
+that fabricated `request.jwt.claims`. A definer wrapper would rewrite
+`current_user` and invert the property the function exists to protect. The file
+says so in a comment, because "harden this by making it DEFINER" is exactly the
+change a future reader would think is an improvement.
+
+## Retrieval ACL drift — FIXED AND APPLIED (2026-08-07)
+
+`sql/27_retrieval_acl_drift_fix.sql` plus `tests/27_retrieval_acl_drift.sql`
+(11 assertions, all passing on a fresh replay).
+
+**APPLIED as deployment migration 39** (20260807182313) by the owner. This
+heading previously read "NOT YET APPLIED" and stayed wrong after the apply --
+caught when an agent citing this file upstream checked `sql/27`'s own header
+instead and found the two disagreed. A summary that contradicts the artifact it
+summarises is worse than no summary, because it is the thing people quote.
+
+The invalidation predicate in `refresh_retrieval_units()` now compares `owner`,
+`visibility` and `workstream` alongside status and content hash, so a full
+rescan REPAIRS access-control drift instead of preserving it. This is the repair
+path for units that were already stale; the incremental triggers in `pending/C`
+maintain correctness going forward but cannot correct history.
+
+`retrieval_acl_drift()` is a new read-only detection surface, so drift can be
+observed without running the repair.
+
+**⚠ PUBLIC SIGNATURE CHANGE.** `refresh_retrieval_units()` returned
+`(invalidated, projected_memories, projected_wiki)` and now returns
+`(invalidated, repaired_acl_drift, projected_memories, projected_wiki)`.
+`CREATE OR REPLACE` cannot widen a return type, so the old function is DROPPED.
+Any runbook or client destructuring the 3-column shape is stale as of this
+migration. This is the **second** live instance of the failure upstream #70
+describes — the first was `supersede_memory()` losing its 5-argument form in
+`sql/20` — and it is recorded here rather than slipped through. Folding the
+count into `invalidated` to preserve the shape was rejected: a repair
+indistinguishable from a no-op cannot answer "was anything actually leaking?",
+which is the only question the change exists to answer.
+
+## Retrieval projection: no auto-refresh, and a latent ACL-drift leak (2026-08-07)
+
+Two separate problems in the retrieval projection. `pending/C_retrieval_projection_refresh.sql`
+addresses both for future writes; NOT APPLIED.
+
+### 1. The projection was never maintained automatically
+
+`retrieval_units` is built by `refresh_retrieval_units()`, a full rescan invoked
+by hand. Nothing called it. Six memories written by other sessions were
+invisible to `retrieve_context()` until the refresh was run manually — the rows
+existed, were `current`, and simply were not in the projection.
+
+That failure is silent by construction. `retrieve_context()` reports
+`units_visible` and `units_matched` honestly, but only about units that exist; a
+memory that was never projected is indistinguishable from one that does not
+exist. The envelope's entire purpose is to separate "nothing found" from
+"nothing searched", and an unmaintained projection defeats it one layer down.
+
+`pending/C` adds per-row AFTER triggers on `memories` and `wiki_pages`. Not a
+rescan and not a schedule — `pg_cron` is not installed. The UPDATE triggers
+carry a WHEN clause so embedding backfill, `hot_touch` and `due_status` writes
+do not re-project. 13 tests in `pending/C_..._TEST.sql`, all passing on a fresh
+replay with C applied.
+
+### 2. ACL DRIFT — a memory made private stays readable through retrieval
+
+**Latent on the deployment, not active.** Owner-verified 2026-08-07: zero ACL
+drift across all 129 production units, because no memory's visibility or owner
+has ever been changed after projection. The mechanism is confirmed; it has
+simply never been triggered. It goes live the first time anyone marks something
+private — which is what founder onboarding does. Latency is a deadline, not a
+mitigation.
+
+`refresh_retrieval_units()` invalidates a unit only when its source stops being
+`current` or its CONTENT HASH drifts. It never compares `owner`, `visibility` or
+`workstream`. `retrieve_context()` filters on the UNIT's copy of `visibility`,
+not the source row's.
+
+Verified on a clean PG17 replay of `sql/00-26` using only the documented
+maintenance path:
+
+| step | result |
+|---|---|
+| shared, after refresh | other principal matches the row (expected) |
+| set `visibility='private'` | other principal **still matches** |
+| run `refresh_retrieval_units()` | other principal **still matches** |
+| inspect | `retrieval_units.visibility='shared'` while `memories.visibility='private'` |
+
+The full rescan does not repair it, because the rescan has the same hash-only
+invalidation rule. **No operation currently closes this except editing the
+memory's text.**
+
+It interacts badly with `sql/26`: now that a promoted record's content is
+immutable, the one accident that used to clear a stale unit — someone editing
+the text — cannot happen anymore. Two individually-correct changes combine into
+a worse outcome than either alone: the leak becomes permanent for an affected
+row instead of eventually self-healing.
+
+`pending/C` fixes it for rows changed after it is applied. It does NOT
+retroactively repair units that are already stale, and fixing
+`refresh_retrieval_units()` itself is a change to `sql/21` that has been left
+for the owner rather than folded in. Any deployment that has ever changed a
+memory's visibility or owner should be treated as having stale units until that
+is done.
+
+## Propose-then-promote + promoted-record audit — BUILT, NOT YET APPLIED (2026-08-07)
+
+`sql/26_propose_then_promote.sql`. Upstream #46 (ADOPT) and #47 (ADOPT).
+**This file is in `sql/` but the deployment does not have it.** It replays and
+its tests pass; it has not been applied to any hosted project.
+
+**What was open.** Probed against a clean PG17 replay of `sql/00-22`: all five
+forbidden paths #46 names were open, plus three more. The root cause was not a
+broken guard — it was that no guard ran on the INSERT path at all.
+`enforce_bounded_status_transition` is BEFORE UPDATE only, and
+`enforce_agent_cannot_self_attest` constrains only `source_kind='agent'`, so
+`promote_memory()` was a convenience wrapper rather than a chokepoint and any
+caller could INSERT `status='current'` directly. Separately,
+`memories.source_artifact_id` was a bare FK unconstrained with respect to
+`raw_artifacts.action`, so `hold`/`exclude`/`evidence` artifacts normalized and
+promoted cleanly through the sanctioned human gate.
+
+**A fifth artifact class the upstream issue does not name.** `action` is
+nullable by design ("classification is explicit, never defaulted"), so `NULL` is
+the default state of every landed artifact and was promotable. The guard is
+therefore an **allowlist** on `action='import'`. A denylist keyed on
+hold/exclude/evidence would have shipped looking correct while leaving the most
+common case open.
+
+**The fix.** `status='current'` is unreachable by direct INSERT; everything
+lands `proposed` and the definer functions are the sole path. Deliberately not
+keyed on `source_kind`, which is caller-declared and therefore bypassable by
+assertion. Promoted records become immutable in their authority-bearing fields
+(`content`, `provenance_basis`, `citation`, `source_kind`, `source_agent`);
+operational fields stay mutable. `promoted_record_audit` records a content hash
+per transition and is append-only; `verify_promoted_integrity()` reports
+match / mismatch / unaudited.
+
+**A bug this exposed, found before it shipped.** `supersede_memory()` set
+`app.promoting = 'off'` immediately after updating the old row and only then
+inserted the successor — which lands at `status='current'`. With the new BEFORE
+INSERT guard, that successor INSERT fell outside the sanction window and
+legitimate supersession was blocked by the guard meant to stop illegitimate
+promotion. The GUC span is widened to cover the successor INSERT. Note this is
+the exact inverse of the `sql/13` fix, which *narrowed* the span because
+`SET LOCAL` persists to end-of-transaction. The span must be as wide as the
+sanctioned work and no wider. `tests/23` b9 is the regression test.
+
+**What this is not.** `app.promoting` is a session GUC; anyone holding
+`service_role` can set it and bypass every guard in the file. This closes the
+accidental path, not the deliberate one — accident-prevention and audit surface,
+not enforcement, exactly as `actor_assurance` is labelled in `sql/20`. Real
+enforcement needs per-principal connection identity (`vault_auth`).
+`tests/23` section D asserts the bypasses still work so the limit shows up in
+test output; if a section D test starts failing, the docs are now wrong.
+
+**Tests.** `tests/23_promotion_guards_negative.sql`: 31 assertions across four
+sections — 7 positive controls over pre-existing guards, 10 forbidden paths, 9
+mutation-audit cases, 2 documented limits. All pass on a fresh replay. The
+controls exist because a negative-test file with no control proves only that it
+can run; at commit `161b835` this same file was all-red in section B by design,
+and the assertions were written against the doctrine before the fix existed
+rather than relaxed to fit it.
+
+**Validation suite now runs on replay.** `tests/replay_fresh_install.sh`
+executes every `tests/NN_*.sql` that does not declare `REQUIRES-DEPLOYMENT`.
+`tests/03` (needs real principal ids) and `tests/12` (needs seeded compliance
+rules) declare it. Verified the runner actually fails: a deliberately-false
+probe file was detected and exited non-zero.
+
+**Open, deliberately.** `wiki_pages` is NOT gated at INSERT. It has no
+`promote_wiki()`, its column default is `status='current'`, and `supersede_wiki()`
+only replaces an already-current page — gating wiki INSERT would make
+`wiki_pages` uncreatable with no sanctioned path. Closing that asymmetry needs a
+`promote_wiki()` first. The artifact allowlist and the audit DO cover
+`wiki_pages`; only the INSERT status gate and the immutability guard are
+memories-only. Wiki content drift remains covered by `doc_integrity` /
+`bless_doc`.
+
+**Also.** `tests/replay_fresh_install.sh` now pins `LC_ALL`: PG17 on macOS
+aborts with "postmaster became multithreaded during startup" otherwise, which
+was blocking the entire harness.
+
+Documentation: `docs/04-record-lifecycle.md`.
+
+## Wiki supersession — APPLIED (2026-08-07)
+
+`sql/24_wiki_supersession.sql`, deployment migration 37. Upstream #71 closed on
+this deployment. Staged as `pending/A_wiki_supersession_ISSUE71.sql` until
+approval, then moved into `sql/` — `pending/` exists precisely so an unapproved
+migration is not swept into a replay that would then prove something untrue.
+## Identity and capability enforcement — FOUNDATION APPLIED (2026-08-03)
+
+The shared administrative credential was correctly identified as authority,
+not identity. Worse, a direct database session can set JWT-shaped request
+configuration itself, so any resolver that trusts `request.jwt.claims` without
+checking connection provenance would convert honest uncertainty into false
+human attribution.
+
+`sql/23` adds a private `vault_auth` layer. `(issuer, sub)` maps a verified
+human and `(issuer, client_id)` maps an agent surface. Direct human requests
+require the human grant; agent-mediated requests require the intersection of
+the human and agent grants. The request gate trusts claims only when
+`session_user = 'authenticator'`; administrative sessions fail closed even if
+they set fabricated claims. The gate deliberately remains security-invoker so
+the original session user is preserved.
+
+The same file fixes a latent correctness defect: `has_capability()` previously
+ignored `principals.active`, so a deactivated principal would regain authority
+as soon as any grant existed. Exact-scope behavior is preserved. Wildcard
+semantics were deliberately not added and require a separate review.
+
+The schema creates zero bindings and zero grants. Its two tables have RLS and
+FORCE RLS with no policies, and no direct privileges for `anon`,
+`authenticated`, or `service_role`. `authenticated` receives only schema usage
+and execute on the boolean `request_has_capability` entry point. Binding
+mutations require review/provenance fields and produce append-only audit
+receipts including `jti` or `session_id` when present.
+
+Transactional verification covers active/deactivated capability behavior;
+reviewed human and agent resolution; unknown, expired, superseded, and
+deactivated denial; human/agent intersection; audit receipts; and forged
+administrative claims returning `false`, never `NULL`. See
+`tests/22_identity_capability_enforcement.sql`.
+
+Verified on a fresh PostgreSQL 17 database: all 24 SQL files replay clean,
+`perimeter_assert()` returns zero rows, every public table has RLS, and the
+integrated identity regression passes with no persistent fixtures. The same
+zero-binding/zero-grant layer was independently verified on a real Supabase
+PostgreSQL 17 deployment.
+
+**Not activated.** Before the first binding: observe a real PostgREST request
+and verify `session_user`; inspect a real signed Auth/OAuth token and confirm
+issuer-controlled `client_id` plus token/session identifiers; add only reviewed
+deployment bindings and exact-scope grants; and replace caller-supplied
+principal retrieval with a derived-identity entry point. See
+`docs/03-identity-capability-enforcement.md` for the complete gate.
 
 ## Governed retrieval, Phase C - IMPLEMENTED (2026-07-29)
 

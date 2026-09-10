@@ -1,0 +1,139 @@
+# rule0-sweep config — EXAMPLE. Every value below is fabricated.
+#
+# Copy this file somewhere OUTSIDE the repository you are scanning, replace the
+# placeholders with your real identifiers, and keep it private. The whole point
+# of the external config is that the tool can be public while the pattern list
+# is not. If you commit your real config into the repo it is protecting, you
+# have reinvented the problem this design exists to solve.
+#
+#   cp contrib/rule0-sweep.config.example ~/.config/rule0-sweep.config
+#   chmod 600 ~/.config/rule0-sweep.config
+#   export RULE0_SWEEP_CONFIG=~/.config/rule0-sweep.config
+#   contrib/rule0-sweep.generic.sh --all /path/to/public-repo
+#
+# Syntax reminder: one directive per line, '#' comments only at line start,
+# values run to end of line. `rule0-sweep.generic.sh --help` has the full spec.
+
+
+# ---------------------------------------------------------------------------
+# hard — case-INSENSITIVE SUBSTRING match.
+# ---------------------------------------------------------------------------
+# For strings that have no innocent usage anywhere in English or in code:
+# project refs, tenant ids, API key prefixes, hostnames, domains, machine
+# names, surnames. Substring because these leak inside URLs, connection
+# strings, base64 blobs and camelCase. Case-insensitive because a copy-paste
+# may have changed the case and the string is still the same secret.
+#
+# Rule of thumb: if you would be comfortable seeing the pattern itself in a
+# public grep result, it probably belongs under `name` instead.
+
+# project / tenant refs (fabricated, 20 chars, the shape a real one has)
+hard  aaaaaaaaaaaaaaaaaaaa
+hard  bbbbbbbbbbbbbbbbbbbb
+
+# people (surnames and given names that are not common words)
+hard  exampleperson
+hard  fakesurname
+
+# company and domain forms, including the @-prefixed handle form
+hard  example-corp
+hard  examplecorp
+hard  @example-corp
+hard  example-corp\.com
+
+# DO NOT put the reserved synthetic domains — .invalid, .test, .example,
+# example.com — in this list. They are what your own fixtures are supposed to
+# use, so listing them makes the sweep fire on every correctly-written test and
+# you are back to a checker that cries wolf. Found the hard way: an earlier
+# draft of this file listed example.invalid and immediately flagged four
+# legitimate test fixtures.
+
+# machine / host names
+hard  workstation-fake-01
+hard  fakehost\.local
+
+# credential shapes worth catching even without a specific value
+hard  BEGIN [A-Z ]*PRIVATE KEY
+hard  xox[baprs]-[A-Za-z0-9-]{10,}
+hard  AKIA[0-9A-Z]{16}
+hard  service_role_key
+hard  -----BEGIN
+
+
+# ---------------------------------------------------------------------------
+# name — case-SENSITIVE WHOLE-WORD match.
+# ---------------------------------------------------------------------------
+# For internal codenames and product names that are also ordinary words. These
+# are matched strictly so the sweep does not fire on prose and shell scripts.
+#
+# THIS SPLIT IS THE WHOLE DESIGN. If you put a codename like the two below into
+# the `hard` list, the sweep matches the shell builtin `test` in every script
+# and the branch name `main` in every README, produces hundreds of hits on a
+# clean tree, and is then ignored by everyone including you.
+
+name  TESTUNIT
+name  MAINFRAME
+name  FakeCorpInternal
+name  Placeholdera
+
+
+# ---------------------------------------------------------------------------
+# include / exclude — path globs
+# ---------------------------------------------------------------------------
+# With no `include` lines every file is scanned, which is the safe default: a
+# leak in a .txt or .csv counts the same as a leak in a .sql. Add `include`
+# lines only when a full scan is genuinely too slow, and know that you are
+# choosing to stop looking somewhere.
+#
+# include  *.sql
+# include  *.md
+# include  *.sh
+# include  *.yml
+# include  *.yaml
+# include  *.json
+
+exclude  *.png
+exclude  *.jpg
+exclude  *.pdf
+exclude  vendor/*
+exclude  node_modules/*
+
+
+# ---------------------------------------------------------------------------
+# history-depth — commits of git history to scan (0 = all)
+# ---------------------------------------------------------------------------
+# A cleanup commit does not remove a leak; it only stops the working tree from
+# showing it. Set this deeper than the number of commits you have made since
+# the last full audit. 0 scans everything and is the honest setting for a repo
+# that has never been swept.
+
+history-depth  20
+
+
+# ---------------------------------------------------------------------------
+# except — declared, auditable exceptions
+# ---------------------------------------------------------------------------
+# Fields: ID | SCOPE | REGEX | JUSTIFICATION [| EXPIRES]
+#   SCOPE         files, history, or all
+#   REGEX         ERE matched against the whole output line, "path:lineno:text"
+#   JUSTIFICATION mandatory, and it must say WHY, not WHAT
+#   EXPIRES       optional YYYY-MM-DD; past that date the sweep refuses to run
+#                 until a human renews or deletes the entry
+# No '|' inside any field. Every run prints every exception and how many lines
+# it suppressed; one that suppressed nothing is reported as STALE.
+#
+# Why this exists rather than a `| grep -v` in the pipeline: a grep -v carries
+# no reason, no owner and no expiry, keeps suppressing after the finding is
+# gone, and is indistinguishable from a bug to the next reader. An exception
+# you cannot audit is a leak you have agreed in advance not to see.
+
+# The real-world case this mechanism was built for: commits published before
+# the local git identity was set to a neutral value carry an author line with a
+# company name in it. Rewriting that history would change every commit SHA,
+# including the ones cited from public documents, to suppress a fact that is
+# going public at launch anyway. Owner decision, dated, scoped to the history
+# pass only, so a NEW history leak still fails the sweep.
+except  legacy-author-metadata | history | ^history:[0-9]+:.?Author: Example Corp <ops@example\.invalid>$ | Pre-existing author metadata in already-published commits. Rewriting history would change every SHA cited from public docs to suppress a company name that is public at launch. Owner decision 2026-07-28. | 2027-07-28
+
+# A lineage or upstream link that legitimately contains an org name.
+except  upstream-lineage-link | all | github\.com/example-org/example-upstream | The upstream repository link is deliberately public and is cited throughout the lineage docs. Narrow regex so only the full URL form is exempt.

@@ -1,5 +1,23 @@
 -- tests/20_disease_claim_term_coverage.sql
 --
+-- RUNS ON EVERY REPLAY as of 2026-08-09. It was REQUIRES-DEPLOYMENT until
+-- sql/53 seeded the regulatory baseline, because a fresh cluster carried none
+-- of the rules and the suite reported failures that were missing seeds rather
+-- than missing coverage -- a result worse than no result, because it buries a
+-- real gap among artefacts.
+--
+-- The opt-out was the right call while the ruleset existed only as deployment
+-- data, and removing it is the point of seeding the baseline: the whole reason
+-- that gap survived is that the check which would have caught it could not run
+-- anywhere it would be noticed.
+--
+-- IT WAS UNREADABLE UNTIL 2026-08-09. This file emits `*** FAIL ***` in a text
+-- column and carried no SUITE_RESULT line, so the runner scored it `PASS?`,
+-- left SUITE_FAILED untouched, and the run ended REPLAY CLEAN with exit 0. A
+-- file written because a false negative reached a live deployment then spent
+-- months in a state where its own failures could not be read. Verdict is now
+-- derived below.
+--
 -- Regression tests for disease-claim detection in compliance_check().
 --
 -- WHY THIS FILE EXISTS: a false-NEGATIVE was found on a live deployment where
@@ -20,6 +38,13 @@
 -- disease-claim ruleset. This repo does not ship seed rules (they are
 -- deployment data); adapt the expectations to your own ruleset.
 
+-- Materialised so the VERDICT below is derived from the same rows the human
+-- reads, rather than recomputed from a duplicated term list that could drift
+-- from it -- and rather than grepped back out of formatted text.
+-- No ON COMMIT DROP: this file runs outside an explicit transaction, so each
+-- statement autocommits and the table would be dropped before the next SELECT
+-- could read it. The temp table dies with the psql session regardless.
+CREATE TEMP TABLE t_cov AS
 WITH t(label, txt, expect) AS (VALUES
  -- named-disease layer (expect critical findings)
  ('bare anxiety',        'This product cures anxiety.',              'FIRE'),
@@ -58,5 +83,75 @@ SELECT t.label, t.expect,
   END AS result
 FROM t;
 
+SELECT * FROM t_cov;
+
 -- Expected: 16 rows, all PASS. Any FAIL is a live compliance gap, not a
 -- test-authoring problem -- investigate the rule, not the test, first.
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- TIER EXPECTATIONS (owner decision, WO-15, 2026-08-09)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Every phrasing below was MEASURED on the live deployment before the tier-2
+-- rule existed. Eight of ten returned zero findings, including "Helps with
+-- depression" and "Good for anxiety" -- both plain disease claims.
+--
+-- The decision was a second tier, not a wider first tier:
+--   critical  hard treatment verb + named condition   BLOCKS
+--   high      soft verb or prepositional construction  REVIEW, does not block
+--   none      legitimate structure/function copy       silent
+--
+-- The `none` rows are the ones that keep this honest. Without them the tier-2
+-- rule could match everything and still score full marks, and the construction
+-- space it covers is exactly where legitimate copy lives.
+CREATE TEMP TABLE t_tier AS
+WITH tt(label, txt, expect_tier) AS (VALUES
+  -- tier 1: unchanged, must still block
+  ('hard: treats depression',      'Treats depression.',                       'critical'),
+  ('hard: prevents named disease', 'Prevents Alzheimer''s disease.',           'critical'),
+  ('hard: treats insomnia',        'Treats insomnia.',                         'critical'),
+  ('hard: cures anxiety',          'Cures anxiety.',                           'critical'),
+  -- tier 2: measured at ZERO findings before this rule existed
+  ('soft: helps with depression',  'Helps with depression.',                   'high'),
+  ('soft: good for anxiety',       'Good for anxiety.',                        'high'),
+  ('soft: reduces symptoms of',    'Reduces symptoms of depression.',          'high'),
+  ('soft: helps with adhd',        'Helps with ADHD.',                         'high'),
+  ('soft: eases insomnia',         'Eases insomnia.',                          'high'),
+  ('soft: supports + condition',   'Supports depression recovery.',            'high'),
+  -- must stay silent: structure/function copy and the mandated disclaimer
+  ('quiet: stress response',       'Supports a healthy stress response.',      'none'),
+  ('quiet: cognitive function',    'Supports cognitive function.',             'none'),
+  ('quiet: calm focus',            'Promotes calm focus.',                     'none'),
+  ('quiet: the disclaimer itself',
+     'This product is not intended to diagnose, treat, cure, or prevent any disease.', 'none')
+)
+SELECT tt.label, tt.expect_tier,
+  (SELECT count(*) FROM compliance_check(tt.txt) c
+     WHERE c.finding_kind='banned_language' AND c.severity='critical') AS n_critical,
+  (SELECT count(*) FROM compliance_check(tt.txt) c
+     WHERE c.finding_kind='banned_language' AND c.severity='high') AS n_high,
+  CASE
+    WHEN tt.expect_tier='critical' AND (SELECT count(*) FROM compliance_check(tt.txt) c
+      WHERE c.finding_kind='banned_language' AND c.severity='critical') > 0 THEN 'PASS'
+    WHEN tt.expect_tier='high' AND (SELECT count(*) FROM compliance_check(tt.txt) c
+      WHERE c.finding_kind='banned_language' AND c.severity='high') > 0
+      AND (SELECT count(*) FROM compliance_check(tt.txt) c
+      WHERE c.finding_kind='banned_language' AND c.severity='critical') = 0 THEN 'PASS'
+    WHEN tt.expect_tier='none' AND (SELECT count(*) FROM compliance_check(tt.txt) c
+      WHERE c.finding_kind='banned_language') = 0 THEN 'PASS'
+    ELSE '*** FAIL ***'
+  END AS result
+FROM tt;
+
+SELECT * FROM t_tier;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- DERIVED VERDICT
+-- ══════════════════════════════════════════════════════════════════════════
+-- The file emitted '*** FAIL ***' in a text column and named no verdict, so the
+-- runner scored it PASS? and the run reported REPLAY CLEAN with exit 0. Written
+-- because a false negative reached a live deployment; then left in a state where
+-- its own failures could not be read.
+SELECT CASE WHEN count(*) = 0 THEN 'SUITE_RESULT: PASS'
+            ELSE 'SUITE_RESULT: FAIL' END AS verdict
+FROM (SELECT result FROM t_cov UNION ALL SELECT result FROM t_tier) all_rows
+WHERE result <> 'PASS';
