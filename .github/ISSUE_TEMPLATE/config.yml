@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Public-safety checklist (read before opening anything)
+    url: https://github.com/jryski/sovereign-memory-core/blob/main/docs/06-public-safety-checklist.md
+    about: >-
+      Issue bodies, titles, PR bodies, review comments, release notes, CI logs
+      and uploaded artifacts are publication surfaces that the repository sweep
+      structurally cannot read. Check them by hand before posting.
+  - name: Something that would help an attacker
+    url: https://github.com/jryski/sovereign-memory-core/security/advisories/new
+    about: >-
+      Do not open a public issue for anything that shortens the path to
+      attacking a running deployment, including a description of which control
+      is currently unenforced. Report it privately instead.

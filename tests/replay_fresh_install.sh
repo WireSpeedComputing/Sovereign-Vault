@@ -18,6 +18,13 @@
 
 set -uo pipefail
 
+# macOS/Homebrew PG17 aborts at startup with "postmaster became multithreaded
+# during startup" when the inherited locale is not one initdb can resolve --
+# the postmaster's own HINT is to set LC_ALL. This script had been passing on
+# this host and started failing on nothing but a locale change, so pin it
+# rather than leave the harness dependent on the caller's shell.
+export LC_ALL="${LC_ALL:-C}"
+
 SQL_DIR="${1:-$(cd "$(dirname "$0")/../sql" && pwd)}"
 PORT="${REPLAY_PORT:-5433}"
 PGDATA_DIR="${REPLAY_PGDATA:-/tmp/svreplay_pgdata}"
@@ -57,8 +64,16 @@ done
 [ "$FAILED" -ne 0 ] && { echo "REPLAY FAILED"; exit 1; }
 
 echo "== post-replay verification =="
-PERIM=$(psql -d "$DB" -t -A -c "select count(*) from perimeter_assert();")
-echo "  perimeter_assert findings (want 0): $PERIM"
+# ── GATE ON THE REPORT, NEVER ON THE PRIMITIVE ────────────────────────────
+# This line used to read `select count(*) from perimeter_assert()`. On a host
+# missing the platform roles every filter in that function matches nothing, so
+# it returns zero and this check read NOT CHECKED as clean. Migration 76 moved
+# the status out of the violation set; the gate now requires BOTH that the
+# perimeter could be evaluated and that it found nothing.
+PERIM_STATUS=$(psql -d "$DB" -t -A -c "select evaluation_status from perimeter_report();")
+PERIM=$(psql -d "$DB" -t -A -c "select coalesce(violation_count::text,'NULL') from perimeter_report();")
+PERIM_OBJ=$(psql -d "$DB" -t -A -c "select objects_examined from perimeter_report();")
+echo "  perimeter_report: status=$PERIM_STATUS violations=$PERIM (want 0) over $PERIM_OBJ objects"
 
 NORLS=$(psql -d "$DB" -t -A -c "select coalesce(string_agg(c.relname,', '),'(none)') from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and not c.relrowsecurity;")
 echo "  tables missing RLS (want none): $NORLS"
@@ -66,16 +81,129 @@ echo "  tables missing RLS (want none): $NORLS"
 echo "  repo-owned functions:"
 psql -d "$DB" -t -A -c "select string_agg(p.proname,',' order by p.proname) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and not exists (select 1 from pg_depend d where d.objid=p.oid and d.deptype='e');" | tr ',' '\n' | sed 's/^/    /'
 
-echo "  tables with rows after replay (expect only schema_changelog and provenance_registry):"
+echo "  tables with rows after replay (expect only schema_changelog, provenance_registry, perimeter_exception):"
 psql -d "$DB" -t -A -c "select coalesce(string_agg(relname||'='||n_live_tup,', '),'(all empty)') from pg_stat_user_tables where n_live_tup>0;" | sed 's/^/    /'
 
-if [ "$PERIM" != "0" ] || [ "$NORLS" != "(none)" ]; then
+if [ "$PERIM_STATUS" != "evaluated" ] || [ "$PERIM" != "0" ] || [ "$NORLS" != "(none)" ]; then
+  [ "$PERIM_STATUS" != "evaluated" ] && \
+    echo "  ^^ perimeter could NOT be evaluated on this host (status=$PERIM_STATUS)."
   echo "REPLAY APPLIED BUT VERIFICATION FAILED"
   exit 1
 fi
 
+# ── validation suite ──────────────────────────────────────────────────────
+# Upstream #46 requires the guard tests run in the validation suite, not by
+# hand. Every tests/NN_*.sql runs here unless it declares REQUIRES-DEPLOYMENT.
+#
+# A glob rather than a named list, deliberately: a new test file is picked up by
+# existing, not by someone remembering to register it. A test nobody runs is
+# indistinguishable from one that was never written.
+#
+# REQUIRES-DEPLOYMENT is an explicit opt-out, not a heuristic. The first version
+# of this loop guessed -- it skipped any file containing :' (a psql variable)
+# and ran everything else. That was wrong twice in one run: it skipped
+# 23_promotion_guards_negative.sql, which merely contains the string
+# 'raw_artifacts:', and it RAN 12_compliance_check_*.sql, which needs seeded
+# compliance rules a fresh cluster does not have. Guessing which tests can run
+# is exactly the sort of thing that quietly stops running a test.
+TEST_DIR="$(cd "$(dirname "$0")" && pwd)"
+SUITE_FAILED=0
+SUITE_UNRESOLVED=0
+SUITE_SKIPPED=0
+SUITE_PASSED=0
+echo "== validation suite =="
+for tf in $(ls "$TEST_DIR"/[0-9]*.sql 2>/dev/null | sort); do
+  # Line-anchored, and only in the header. The first version grepped for the
+  # token ANYWHERE in the file, so a test file that merely DESCRIBED the
+  # mechanism in a comment silently opted itself out and was never run --
+  # which happened, to three new suites at once. A skip that can be triggered
+  # by documentation is a skip nobody notices.
+  # ── A SKIP IS NOT A PASS EITHER ─────────────────────────────────────────
+  # This opt-out is still honoured, but it no longer buys a clean top line.
+  # Two suites sat behind it for months -- 03 (owner/visibility isolation over
+  # the boot surfaces) and 12 (six compliance regressions) -- and every replay
+  # printed SKIP for both and then REPLAY CLEAN with exit 0. Neither actually
+  # needed a deployment; one wanted three uuids substituted by hand and the
+  # other wanted seed data that sql/53 has since shipped. Both now provision
+  # their own fixtures and are scored.
+  #
+  # Counting skips into the same gate as unresolved suites means the next
+  # suite to declare the opt-out has to justify it to whoever reads the exit
+  # code, rather than disappearing behind a word that looks deliberate.
+  if head -40 "$tf" | grep -qE '^-- REQUIRES-DEPLOYMENT(:|$)'; then
+    echo "  SKIP  $(basename "$tf") (declares REQUIRES-DEPLOYMENT -- NOT scored)"
+    SUITE_SKIPPED=$((SUITE_SKIPPED+1))
+    continue
+  fi
+  if ! out=$(psql -d "$DB" -v ON_ERROR_STOP=1 -f "$tf" 2>&1); then
+    echo "  FAIL  $(basename "$tf") (error)"
+    echo "$out" | grep -E "ERROR|FATAL" | head -5 | sed 's/^/        /'
+    SUITE_FAILED=1
+    continue
+  fi
+  # ── READ THE VERDICT, DO NOT INFER IT ──────────────────────────────────
+  # These files exit 0 even when an assertion is false, so the runner has to
+  # decide. It used to grep the formatted output for '| f |'. That was wrong in
+  # BOTH directions:
+  #   * an assertion evaluating to NULL prints a BLANK cell, so real failures
+  #     were invisible (21 of 24 assertions once "passed" against a function
+  #     that lacked the feature entirely);
+  #   * a file that legitimately prints boolean `actual`/`expected` data columns
+  #     matched the pattern and was reported as failing when every assertion
+  #     passed.
+  # A suite must state its own verdict. Files emit `SUITE_RESULT: PASS|FAIL`.
+  if echo "$out" | grep -q 'SUITE_RESULT: FAIL'; then
+    echo "  FAIL  $(basename "$tf")"
+    echo "$out" | grep -E 'SUITE_RESULT|\| f ' | head -8 | sed 's/^/        /'
+    SUITE_FAILED=1
+  elif echo "$out" | grep -q 'SUITE_RESULT: PASS'; then
+    echo "  PASS  $(basename "$tf")"
+    SUITE_PASSED=$((SUITE_PASSED+1))
+  else
+    # ── UNRESOLVED IS NOT A PASS, AND THERE IS NO LONGER A FALLBACK ────────
+    # There used to be two heuristics here: a scan for '| f |' in the formatted
+    # output, and a scan for the literal '*** FAIL ***'. Both are gone.
+    #
+    # They were removed rather than narrowed, on purpose. A heuristic that can
+    # score a suite is a heuristic that can EXCUSE a suite from stating its own
+    # verdict, and every unscored suite in this project's history got there by
+    # being tolerable to the runner. While a fallback existed, "no SUITE_RESULT"
+    # was a survivable condition; now it is a non-zero exit.
+    #
+    # Nothing is lost by deleting the '*** FAIL ***' scan:
+    # 20_disease_claim_term_coverage.sql is the only file that emits that
+    # marker, and its own derived verdict is computed from the same rows
+    # (`WHERE result <> 'PASS'`), so the signal is read by the file itself
+    # rather than inferred from its formatting by someone else.
+    #
+    # The '| f |' scan was wrong in both directions and is documented as such
+    # above: a NULL assertion prints a blank cell and read as a pass, and a
+    # suite printing legitimate boolean data columns read as a failure.
+    echo "  UNRESOLVED  $(basename "$tf") (no SUITE_RESULT verdict -- cannot be scored)"
+    SUITE_UNRESOLVED=$((SUITE_UNRESOLVED+1))
+  fi
+done
+[ "$SUITE_FAILED" -ne 0 ] && { echo "VALIDATION SUITE FAILED"; exit 1; }
+
+# Exit 2, not 0 and not 1. An unresolved suite is not a failure and it is not a
+# pass; reporting it as either is how this went unnoticed. "Everything that
+# could be scored passed" is a different claim from "everything passed", and the
+# top line must not make the second claim while the second is unknown.
+if [ "$SUITE_UNRESOLVED" -ne 0 ] || [ "$SUITE_SKIPPED" -ne 0 ]; then
+  echo
+  echo "REPLAY INCOMPLETE -- $SUITE_UNRESOLVED unscored, $SUITE_SKIPPED skipped, $SUITE_PASSED passed."
+  echo "Every suite that COULD be scored passed. That is not the same as a clean"
+  echo "replay, and this line exists so the difference is visible. Give the"
+  echo "unresolved suites a derived SUITE_RESULT line, and justify or remove any"
+  echo "REQUIRES-DEPLOYMENT opt-out."
+  exit 2
+fi
+
 echo
-echo "REPLAY CLEAN."
+# The count is printed on the CLEAN line deliberately. "REPLAY CLEAN" on its own
+# is true of a run that scored twenty-five suites and of a run that scored none;
+# this project has shipped both and could not tell them apart from the top line.
+echo "REPLAY CLEAN -- $SUITE_PASSED suite(s) scored, 0 unresolved, 0 skipped."
 echo "NOTE: a local replay cannot prove cloud-host default-privilege behavior"
 echo "on newly created objects, nor extension placement. Those still require"
 echo "validation against a real hosted project."

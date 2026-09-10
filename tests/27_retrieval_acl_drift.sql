@@ -1,0 +1,197 @@
+-- tests/27_retrieval_acl_drift.sql
+-- Covers sql/27_retrieval_acl_drift_fix.sql.
+--
+-- The point of this file is the REPAIR path. pending/C's triggers keep the
+-- projection correct going forward; they cannot correct a unit that was already
+-- stale when they were installed. Only the rescan can, and the rescan is
+-- exactly what used to preserve the drift instead of fixing it.
+--
+-- Every `pass` must be true.
+
+BEGIN;
+
+CREATE TEMP TABLE t(test text, pass boolean, detail text) ON COMMIT DROP;
+
+INSERT INTO principals (id,kind,display_name,email) VALUES
+ ('11111111-1111-1111-1111-111111111111','human','H1','h1@example.com'),
+ ('22222222-2222-2222-2222-222222222222','human','H2','h2@example.com');
+
+-- Since sql/36 (migration 43), retrieve_context() requires the principal to hold
+-- read on the row's workstream scope. These fixtures predate that gate and
+-- created rows with no workstream, which map to workstream:unclassified. Without
+-- the scope declared and granted, every retrieval assertion below returns zero --
+-- correctly, and for a reason that has nothing to do with what they test.
+INSERT INTO scope_registry (scope, kind, identifier, description)
+VALUES ('workstream:unclassified','workstream','unclassified','Reserved scope for rows with no workstream')
+ON CONFLICT (scope) DO NOTHING;
+INSERT INTO capability_grants (principal_id, resource_scope, permissions, granted_by)
+SELECT p.id,'workstream:unclassified','{read}'::capability_permission[], p.id
+FROM principals p WHERE p.kind='human';
+
+-- ── SIMULATING DRIFT AFTER MIGRATION 54 ───────────────────────────────────
+-- The incremental triggers (sql/41, migration 54) now sync the projection on
+-- every ACL-relevant write, so a plain UPDATE can no longer CREATE drift -- the
+-- trigger repairs it in the same statement. That is the triggers working.
+--
+-- The rescan's repair path still matters: it is what corrects drift that
+-- predates the triggers, or that accumulated while they were absent or
+-- disabled. So this file disables them around the mutation to produce exactly
+-- that state. Without this the tests read as "no drift found" and prove nothing
+-- about repair.
+CREATE OR REPLACE FUNCTION _t27_drift(p_id uuid, p_vis visibility_level)
+RETURNS void LANGUAGE plpgsql AS $f$
+BEGIN
+  ALTER TABLE memories DISABLE TRIGGER trg_sync_retrieval_memories_upd;
+  -- ACL drift is by definition a state no sanctioned path produces, so it is
+  -- simulated through the reclassify window rather than via reclassify_record().
+  -- Routing it through the sanctioned function would ALSO refresh the
+  -- projection, and this suite exists to test the repair of a projection that
+  -- did NOT get refreshed.
+  SET LOCAL app.reclassifying = 'on';
+  UPDATE memories SET visibility=p_vis WHERE id=p_id;
+  SET LOCAL app.reclassifying = 'off';
+  ALTER TABLE memories ENABLE TRIGGER trg_sync_retrieval_memories_upd;
+END $f$;
+
+-- ── 1. The regression, end to end: drift is created, detected, and repaired.
+DO $c$ DECLARE v uuid; m_before int; m_after int; drift_before int; drift_after int; r record;
+BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('zzsecret merger codename bluefin','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  PERFORM refresh_retrieval_units();
+
+  -- precondition: while shared, the other principal can see it. Without this
+  -- the rest of the test could pass because nothing was ever visible.
+  SELECT (retrieve_context('22222222-2222-2222-2222-222222222222','zzsecret bluefin')
+            ->>'units_matched')::int INTO m_before;
+  INSERT INTO t VALUES ('precondition_shared_row_visible_to_other', m_before >= 1,
+    'H2 matches while shared: '||m_before);
+
+  -- create the drift: content unchanged, ACL changed
+  PERFORM _t27_drift(v,'private');
+
+  SELECT count(*) INTO drift_before FROM retrieval_acl_drift();
+  INSERT INTO t VALUES ('drift_is_detected', drift_before >= 1,
+    'retrieval_acl_drift() reports '||drift_before||' drifted unit(s)');
+
+  -- THE FIX: a full rescan must now repair it rather than preserve it.
+  SELECT * INTO r FROM refresh_retrieval_units();
+  INSERT INTO t VALUES ('rescan_reports_repaired_count', r.repaired_acl_drift >= 1,
+    'repaired_acl_drift = '||r.repaired_acl_drift);
+
+  SELECT count(*) INTO drift_after FROM retrieval_acl_drift();
+  INSERT INTO t VALUES ('drift_is_gone_after_rescan', drift_after = 0,
+    'drift after repair: '||drift_after);
+
+  SELECT (retrieve_context('22222222-2222-2222-2222-222222222222','zzsecret bluefin')
+            ->>'units_matched')::int INTO m_after;
+  INSERT INTO t VALUES ('other_principal_can_no_longer_see_it', m_after = 0,
+    'H2 matches after repair: '||m_after);
+
+  INSERT INTO t VALUES ('owner_still_sees_own_private_row',
+    (retrieve_context('11111111-1111-1111-1111-111111111111','zzsecret bluefin')
+       ->>'units_matched')::int >= 1,
+    'the repair must not over-close');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('drift_is_gone_after_rescan',false,SQLERRM); END $c$;
+
+-- ── 2. Owner drift, not just visibility. A private row reassigned to a
+-- different owner must follow its new owner.
+DO $c$ DECLARE v uuid; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('zzowner transfer canary','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','private') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  PERFORM refresh_retrieval_units();
+
+  ALTER TABLE memories DISABLE TRIGGER trg_sync_retrieval_memories_upd;
+  SET LOCAL app.reclassifying = 'on';   -- simulating drift; see note above
+  UPDATE memories SET owner='22222222-2222-2222-2222-222222222222' WHERE id=v;
+  SET LOCAL app.reclassifying = 'off';
+  ALTER TABLE memories ENABLE TRIGGER trg_sync_retrieval_memories_upd;
+  PERFORM refresh_retrieval_units();
+
+  INSERT INTO t VALUES ('owner_drift_repaired_new_owner_sees',
+    (retrieve_context('22222222-2222-2222-2222-222222222222','zzowner canary')
+       ->>'units_matched')::int >= 1, 'new owner sees it');
+  INSERT INTO t VALUES ('owner_drift_repaired_old_owner_blind',
+    (retrieve_context('11111111-1111-1111-1111-111111111111','zzowner canary')
+       ->>'units_matched')::int = 0, 'previous owner no longer sees it');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('owner_drift_repaired_old_owner_blind',false,SQLERRM); END $c$;
+
+-- ── 3. The repair must not be indiscriminate. A clean projection must report
+-- zero repaired and must not churn units -- otherwise "repaired 0" carries no
+-- information and every rescan would invalidate the whole table.
+DO $c$ DECLARE v uuid; gen_before timestamptz; gen_after timestamptz; r record; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('zzstable row','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  PERFORM refresh_retrieval_units();
+  SELECT generated_at INTO gen_before FROM retrieval_units
+   WHERE source_id=v AND invalidated_at IS NULL;
+
+  SELECT * INTO r FROM refresh_retrieval_units();
+  SELECT generated_at INTO gen_after FROM retrieval_units
+   WHERE source_id=v AND invalidated_at IS NULL;
+
+  INSERT INTO t VALUES ('clean_rescan_reports_zero_drift', r.repaired_acl_drift = 0,
+    'repaired_acl_drift on a clean projection: '||r.repaired_acl_drift);
+  INSERT INTO t VALUES ('clean_rescan_does_not_churn', gen_before = gen_after,
+    'unchanged unit not regenerated');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('clean_rescan_does_not_churn',false,SQLERRM); END $c$;
+
+-- ── 4. Embeddings must not outlive the unit they describe.
+DO $c$ DECLARE v uuid; u uuid; n_stale int; BEGIN
+  INSERT INTO memories (content, source_kind, provenance_basis, status, owner, visibility)
+  VALUES ('zzembedded row','manual','human_direct','proposed',
+          '11111111-1111-1111-1111-111111111111','shared') RETURNING id INTO v;
+  PERFORM promote_memory(v,'11111111-1111-1111-1111-111111111111');
+  PERFORM refresh_retrieval_units();
+  SELECT id INTO u FROM retrieval_units WHERE source_id=v AND invalidated_at IS NULL;
+
+  INSERT INTO retrieval_embeddings (retrieval_unit_id, model_provider, model_name,
+    model_version, dimensions, embedding, rendered_text_hash)
+  VALUES (u,'test','m','1',384,NULL,'hash');
+
+  PERFORM _t27_drift(v,'private');
+  PERFORM refresh_retrieval_units();
+
+  SELECT count(*) INTO n_stale FROM retrieval_embeddings
+   WHERE retrieval_unit_id=u AND stale_at IS NOT NULL;
+  INSERT INTO t VALUES ('embedding_marked_stale_with_its_unit', n_stale = 1,
+    'stale embeddings for the invalidated unit: '||n_stale);
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('embedding_marked_stale_with_its_unit',false,SQLERRM); END $c$;
+
+SELECT test, pass, left(detail,70) AS detail FROM t ORDER BY test;
+SELECT 'ALL' AS summary, bool_and(coalesce(pass,false)) AS pass,
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' of '||count(*)::text||' failed' AS detail FROM t;
+
+-- ── GUARD: an assertion that evaluated to NULL is NOT a pass ───────────────
+-- Added after a discrimination run exposed this at every layer. A jsonb key
+-- that does not exist yields NULL from ->>, so `(... ->> 'k') = 'v'` is NULL
+-- rather than false; bool_and() IGNORES nulls, count(*) FILTER (WHERE NOT pass)
+-- counts zero, and the replay runner greps for '| f' and sees a blank column.
+-- 21 of 24 assertions in one file "passed" against a function that lacked the
+-- feature entirely. Any NULL here is a broken assertion, not a passing one.
+SELECT 'GUARD_no_null_assertions' AS summary,
+       coalesce(bool_and(pass IS NOT NULL), true) AS pass,
+       count(*) FILTER (WHERE pass IS NULL)::text||' assertion(s) evaluated to NULL' AS detail
+FROM t;
+
+-- ── EXPLICIT VERDICT ──────────────────────────────────────────────────────
+-- The runner reads THIS line, not the formatted rows above. Grepping output
+-- for '| f |' was wrong in both directions: it missed assertions that
+-- evaluated to NULL (blank cell), and it invented failures in files that
+-- legitimately print boolean `actual`/`expected` data columns. A test suite
+-- must state its own verdict rather than have one inferred from its table
+-- formatting.
+SELECT CASE WHEN bool_and(coalesce(pass,false)) THEN 'SUITE_RESULT: PASS'
+            ELSE 'SUITE_RESULT: FAIL' END AS verdict FROM t;
+
+ROLLBACK;

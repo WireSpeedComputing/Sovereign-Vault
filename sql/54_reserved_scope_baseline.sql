@@ -1,0 +1,75 @@
+-- 54_reserved_scope_baseline.sql
+--
+-- MIGRATION: 69_reserved_scope_baseline
+--
+-- B4 continued. The same question the compliance ruleset raised, asked of every
+-- other control: which checkers depend on rows that no repo file seeds?
+--
+-- ══════════════════════════════════════════════════════════════════════════
+-- MEASURED: fresh install versus live deployment, every table
+-- ══════════════════════════════════════════════════════════════════════════
+--   table                        fresh   live   verdict
+--   consequential_domain_policy      4      4   seeded, fine
+--   provenance_registry             10     10   seeded, fine
+--   retrieval_topology               4      4   seeded, fine
+--   language_rules                   4     20   regulatory seeded (sql/53); the
+--                                               other 16 are deployment data by
+--                                               design
+--   perimeter_exception             10      6   difference is entirely the
+--                                               unapplied task-board subsystem;
+--                                               not drift
+--   scope_registry                   0     10   *** the finding ***
+--   agent_surface_alias              0      5   *** second finding, below ***
+--
+-- ══════════════════════════════════════════════════════════════════════════
+-- WHY AN EMPTY scope_registry IS THE "CLEAN BY CONSTRUCTION" SHAPE
+-- ══════════════════════════════════════════════════════════════════════════
+-- Measured on a fresh install:
+--
+--   scope_authority_report()  returns 0 rows
+--   row_scope(null)           returns 'workstream:unclassified'
+--   that scope registered     FALSE
+--
+-- The report returns nothing, and nothing reads as clean. It is not reporting
+-- that the authorization vocabulary is absent; it has no vocabulary to report
+-- ON. Same shape as the compliance detector reporting a clean replay because
+-- there was no rule left to fail.
+--
+-- Worse than merely quiet, because of the second line: row_scope() emits
+-- 'workstream:unclassified' unconditionally for any row with no workstream, and
+-- capability_grants.resource_scope is FK-bound to scope_registry. So on a fresh
+-- install the one scope the mapping function is guaranteed to produce cannot be
+-- granted to anyone. Every unclassified row is readable by nobody, no grant can
+-- be written to change that, and no surface says why.
+--
+-- ══════════════════════════════════════════════════════════════════════════
+-- THE SPLIT, SAME SEAM AS THE COMPLIANCE RULESET
+-- ══════════════════════════════════════════════════════════════════════════
+-- SEEDED HERE: 'workstream:unclassified' only. It is not a domain choice --
+-- row_scope() in sql/36 emits it as the mapping for NULL and empty, so it is
+-- part of the protocol rather than part of any deployment's vocabulary. Its
+-- absence is a guaranteed inconsistency on any install, which is exactly what
+-- makes it generic.
+--
+-- NOT SEEDED: every domain workstream. Those name what a particular business
+-- does, they are Rule 0 material, and they would be wrong for anyone else.
+-- A deployment declares its own, deliberately and auditably, exactly as
+-- granting them is a deliberate act.
+--
+-- ══════════════════════════════════════════════════════════════════════════
+-- NOT FIXED HERE, AND IT HAS ALREADY BITTEN ONCE
+-- ══════════════════════════════════════════════════════════════════════════
+-- agent_surface_alias is empty on a fresh install and carries 5 rows live. It
+-- is the actor alias map that migration 50 added for resolving recorded actor
+-- values. An empty alias map resolves nothing, and "an identity resolver that
+-- resolved nothing while every surface signal looked healthy" is instance 5 on
+-- this project's own list of check-reports-success-without-checking.
+--
+-- Left as deployment data because alias entries name real actors, which is Rule
+-- 0 material. Recorded here so the next person to meet an empty alias map finds
+-- this note rather than rediscovering instance 5.
+
+insert into scope_registry (scope, kind, identifier, description)
+select 'workstream:unclassified', 'workstream', 'unclassified',
+       'Reserved scope for records carrying no workstream. row_scope() maps NULL and empty to this, so it must exist on every deployment; it is protocol, not vocabulary. Granting it is a deliberate act like any other scope -- it is reserved, not exempt.'
+where not exists (select 1 from scope_registry where scope = 'workstream:unclassified');
