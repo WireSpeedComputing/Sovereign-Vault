@@ -1,5 +1,45 @@
 # STATUS
 
+**Local documentation note (2026-09-13):** README's quick-start previously told
+readers to run `sql/00` through `sql/23` "in numeric order" as if that were the
+full, current install. It isn't — the repo now runs through `sql/63`, later
+migrations (below) supersede earlier framing in this file, and the tree
+contains duplicate numeric prefixes (two files each named `61` and `62`), an
+inventory fact counted from filenames. This pass has not verified a complete
+dependency-safe order or full-tree replay of the current tree. This note does
+not replace `sql/00`–`23` with an unverified `sql/00`–`63` instruction; it
+removes the misleading one until a tested manifest exists. The dated PG16/17
+results elsewhere in this file remain accurate for the file ranges and dates
+they describe — see the dated entries directly rather than treating any
+result in this file as covering the current full tree.
+
+Two clarifications on RLS, since `sql/36`/`sql/37` are cited below: "RLS
+enabled with no policy" is fail-closed (deny-all) for roles subject to RLS,
+not an exposure — see migration 43's own header, which states this. That is
+a distinct condition from RLS being disabled. Superusers and BYPASSRLS roles
+bypass row security; table owners normally bypass it unless FORCE ROW LEVEL
+SECURITY applies. Ordinary SQL privileges and other controls remain separate.
+This documentation review does not establish the RLS state or data exposure
+of any live deployment; check the dated entries directly.
+
+The identity/capability layer (`sql/23`) is layered enforcement infrastructure
+that, as of its own entry below, ships with zero bindings and zero grants and
+is explicitly **not activated** — that limitation stands as stated in its own
+section and is not being asserted here as a *current, unverified* rediscovery
+of the earlier "decorative capability" finding, which was about a different
+layer (`sql/30`/`sql/36`/`sql/37`) with its own historical finding, below,
+that it was unwired at the time. Current wiring and deployment status for
+that layer are not requalified in this note.
+
+Historical entries below report earlier runs. The script itself is source
+evidence of intended replay behavior, not proof that a run occurred or passed.
+It is cited throughout this file, not as something to run from this note. It reads
+`REPLAY_PGDATA`/`REPLAY_SOCK` from the caller's environment, defaults to fixed
+paths under `/tmp`, and its cleanup trap runs `rm -rf` on whatever those
+resolve to on exit — destructive by design against what it assumes is a
+disposable target. Do not run it against a shared or unverified path. This
+pass does not run it and makes no fresh PASS/FAIL claim.
+
 Last updated: 2026-08-07. Most recent work: "Propose-then-promote", "Retrieval
 projection", "Wiki supersession", "Identity and capability enforcement",
 "Governed retrieval, Phase C" and "Transition concurrency + actor custody"

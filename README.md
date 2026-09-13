@@ -37,12 +37,14 @@ database the schema exists to create.
 
 ## Status
 
-Applied and validated against both vanilla PostgreSQL 16 and a real Supabase
-project running PostgreSQL 17. All Phase 1 acceptance tests plus the
-import-framework tests pass on both. The domain-layer example, compliance
-scanning, promotion/rejection governance, and owner-scoped boot surfaces are
-also applied and tested — see `STATUS.md`, which is the authoritative
-record and lists every defect found and fixed along the way.
+Early phases (Phase 0/1, the domain-layer example, compliance scanning,
+promotion/rejection governance, and owner-scoped boot surfaces) were applied
+and validated against vanilla PostgreSQL 16 and a real Supabase project on
+PostgreSQL 17. Those results are historical and scoped to the file ranges and
+dates each dated entry in `STATUS.md` actually describes — they are not a
+claim that the current full tree (through `sql/63`) has been replayed clean.
+See `STATUS.md`, the authoritative record, for what has and hasn't been
+verified since, and for every defect found and fixed along the way.
 
 **Read `STATUS.md`'s "Known open risks" before trusting this with real
 business data.** The private identity-binding layer now exists, but it ships
@@ -92,6 +94,16 @@ sql/20-22                    transition custody, governed retrieval, and
                               wiki-page source-agent parity
 sql/23_identity_capability_enforcement.sql  private fail-closed identity
                               bindings and dual human/agent authorization
+sql/24-63                    later migrations (RLS policy wiring, retrieval
+                              projection, scope-bound authority, task board,
+                              compliance/claims hardening, and more) — see
+                              `STATUS.md` for what each does and its
+                              verification status; the tree has duplicate
+                              numeric prefixes (two files each named `61`
+                              and `62`, counted from filenames), and this
+                              pass has not verified a dependency-safe
+                              install order, so no numeric-order install
+                              instruction is given here yet
 tests/                       isolation and compliance regression tests, meant
                               to be RUN, not read. See the header of
                               tests/20_* for the one-term-per-test discipline
@@ -126,11 +138,19 @@ name-matching audit missed a real RLS gap that only a content grep caught.
 
 ## Quick start
 
-1. Create a Supabase project or vanilla Postgres 15+ database.
-2. Run `sql/00_extensions.sql` through
-   `sql/23_identity_capability_enforcement.sql` in
-   numeric order. `sql/10`–`sql/12` are an example domain module — skip or
-   replace them with your own domain schema.
+**STOP before installing the full tree.** This repo now runs through
+`sql/63`, with later migrations superseding earlier framing (see
+`STATUS.md`), and the set contains at least two duplicate numeric
+prefixes (two files each named `61` and `62`), counted from filenames.
+This pass has not verified a complete dependency-safe order or full-tree
+replay of `sql/00` through the highest-numbered file — do not run plain
+numeric order against a live database until a tested install manifest
+exists. Building and testing that manifest is open work; see `STATUS.md`.
+
+1. Only after an independently verified install manifest and disposable
+   replay, provision the intended deployment target.
+2. `sql/10`–`sql/12` are an example domain module — the optional example
+   modules require dependency-aware manifest validation before inclusion.
 3. Register your own principals (`docs/02-onboarding-principals.md` has the
    template) — do not skip this and use only the service-role key for
    everything, or multi-user is cosmetic.
