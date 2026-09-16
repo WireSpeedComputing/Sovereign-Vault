@@ -143,9 +143,12 @@ name-matching audit missed a real RLS gap that only a content grep caught.
 
 ## License / provenance
 
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE). Contributions are accepted under the Developer Certificate of
+Origin. See [DCO.md](DCO.md).
+
 Extracted from a live multi-user business deployment and genericized.
 Architecture partly derived from
 [jryski/sovereign-memory-core](https://github.com/jryski/sovereign-memory-core)'s
-published design (see LINEAGE.md). Use freely. No warranty. Read
-`docs/01-architecture.md` — especially the open question at the end —
-before putting anything sensitive in it.
+published design (see LINEAGE.md). Read `docs/01-architecture.md` — especially
+the open question at the end — before putting anything sensitive in it.
