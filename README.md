@@ -1,6 +1,6 @@
 # Sovereign Vault
 
-Maintained as part of the WIRE SPEED COMPUTING LLC program led by Jesse Ryski.
+Maintained as part of the WIRE SPEED COMPUTING LLC program led by the Primary Users.
 [Website](https://www.wirespeedcomputers.com/) |
 [Program guide](https://github.com/WireSpeedComputing/sovereign-ai-os).
 Existing license terms and contributor rights are unchanged.
