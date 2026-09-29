@@ -1,8 +1,15 @@
 # User-scoped MCP implementation handoff
 
-Reference baseline: `530f891b2fcbe57afd88c1edb5f5eb7cf0bb24df`.
-Prepared September 8, 2026. This is implementation guidance, not an applied
-migration, a deployment audit, or an enterprise-readiness claim.
+Reference baseline: `297054954e76760eded6e5561344881074e12ffc`
+(current `main`). That tree includes
+`sql/23_identity_capability_enforcement.sql` and
+`docs/03-identity-capability-enforcement.md`. Prepared September 8, 2026;
+baseline refreshed September 29, 2026. This is implementation guidance, not an
+applied migration, a deployment audit, or an enterprise-readiness claim.
+
+`530f891b2fcbe57afd88c1edb5f5eb7cf0bb24df` is the pre-rebase validation
+baseline only. It is not the current tree and is not the schema to build
+against.
 
 This document transfers reusable lessons from the
 [User MCP project](https://github.com/jryski/Supabase_user_MCP). Adopt the
