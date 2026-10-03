@@ -103,6 +103,10 @@ docs/02-onboarding-principals.md   template for registering humans and agents
                               your real roster is data, not repo content)
 docs/03-identity-capability-enforcement.md  threat model, exposure boundary,
                               activation gates, and deployment/data split
+docs/business-os-ontology-boundary.md
+                              which Business OS concepts this public plane
+                              may name, and which stay in HOUSE, VAULT,
+                              or other repos
 ```
 
 Note: file numbering here is cumulative-by-topic and does not map 1:1 to a
