@@ -50,6 +50,12 @@ with zero bindings and zero grants. Until real Auth/OAuth tokens are verified
 and reviewed bindings are activated, shared administrative connections remain
 control-plane authority rather than attributable identity.
 
+For the next implementation pass, use the
+[user-scoped MCP handoff](docs/14-user-scoped-mcp-handoff.md): verified identity,
+business-specific access mapping, one bounded read pilot, independent review,
+and deployment-specific recovery gates. This is guidance, not an applied
+authorization rollout. See [SECURITY.md](SECURITY.md) for private reporting.
+
 ## Repo map
 
 ```
@@ -103,6 +109,8 @@ docs/02-onboarding-principals.md   template for registering humans and agents
                               your real roster is data, not repo content)
 docs/03-identity-capability-enforcement.md  threat model, exposure boundary,
                               activation gates, and deployment/data split
+docs/14-user-scoped-mcp-handoff.md  user-scoped MCP implementation and
+                              review handoff (guidance, not a rollout)
 ```
 
 Note: file numbering here is cumulative-by-topic and does not map 1:1 to a
