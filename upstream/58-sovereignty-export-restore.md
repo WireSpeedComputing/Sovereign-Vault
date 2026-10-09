@@ -13,9 +13,7 @@ reformats. Full write-up: `docs/07-sovereignty-export-restore.md`.
 
 ## The correction that drove the whole design: name-equality is not definition equivalence
 
-Our previous evidence of "the fresh build matches the deployment" was a
-comparison of object **names**, filtered to non-extension objects. A reviewer
-correctly observed that **name-equality does not prove definition equivalence.**
+A name inventory is weaker than a definition comparison.
 All of the following pass a name check cleanly:
 
 - a function with the right name and a rewritten body
@@ -38,23 +36,12 @@ we would most want upstreamed.
 
 ## Why raw text does not work either — and the pair that proves it
 
-The obvious fix is to hash `pg_get_functiondef()`. That **fails on a real pair in
-this repo.** The deployed `refresh_retrieval_units()` and the version in
-`sql/27_retrieval_acl_drift_fix.sql` are semantically identical and textually
-different: the applied migration carried a condensed body, the repo file keeps
-the full rationale. Measured:
-
-```
-real body   4387 chars   raw md5 differs
-condensed   3467 chars   raw md5 differs
-canonical hash: IDENTICAL
-```
-
-A raw-text check reports drift on that correct pair **forever**, and a checker
-that cries wolf gets muted — after which it catches nothing. We have hit that
-exact failure three separate times in this project (a perimeter check returning
-two hundred rows of extension noise, a secret sweep matching shell builtins, and
-this), so it is treated as a design constraint rather than a nuisance.
+A raw hash of `pg_get_functiondef()` treats comment/format changes as drift.
+The source canonicalizer supplies a quote-aware comparison instead. A proposed
+fixture should construct two formatting-only variants from the same public
+function body, plus a variant deleting one authorization predicate. The first
+pair must compare equal and the altered predicate must be detected. This method
+uses fabricated variants; it makes no claim about a deployed function pair.
 
 **What canonicalization does:** comments stripped and whitespace runs collapsed
 **outside string literals and quoted identifiers**, by a quote-aware tokenizer
@@ -85,23 +72,10 @@ each case isolated. Without `event_triggers = off`, every DDL corruption would
 *also* trip the row-count check via the DDL changelog, and "caught" would stop
 meaning anything.
 
-**The sensitivity claim, tested in both directions on the same real function
-body.** Against the actual `refresh_retrieval_units()` — 4KB of plpgsql with nine
-comment blocks — run through the entire verifier:
-
-- condensed exactly the way the applied migration condensed it, semantics
-  untouched → **must verify CLEAN**. That is 920 characters of pure formatting
-  difference.
-- the same condensed body with **one ACL predicate deleted** (`and ru.workstream
-  is not distinct from m.workstream` — a single comparison, the exact defect
-  `sql/27` exists to fix) → **must be CAUGHT**.
-
-Blind to 920 characters of formatting, sensitive to one deleted predicate. Both
-halves are asserted, because either alone is worthless: if it called the first
-drift it would cry wolf on the real repo/deployment pair forever; if it called
-the second clean it would miss the defect. The condensation is done with
-`sed`/`tr`, deliberately **not** with our canonicalizer, so the tool is not
-grading its own homework.
+**Required sensitivity control:** use the same source function for a
+formatting-only transformation and a one-predicate authorization mutation.
+Transform it independently of the canonicalizer so the comparison tool is not
+creating its own expected answer. Record actual outcomes when executed.
 
 ## The package, and three decisions in it
 
@@ -158,10 +132,9 @@ at all.
 The full list ships **inside every package** so the person holding it has the
 caveats, not just the checksums. The ones we would not want a reader to miss:
 
-- **This is a synthetic fixture, not the deployment.** It proves the mechanism.
-  The live deployment's rows have never been through this pipeline. Running it
-  against a privacy-safe slice of real data is a separate, still-outstanding act.
-  Everything above is mechanism.
+- **A fabricated fixture tests the mechanism.** It does not certify any
+  adopter's data or target. Target-specific acceptance requires its own private
+  scope declaration, source/package identity, and exact run receipt.
 - **Canonicalization is not semantic equivalence.** Bodies differing only in
   keyword case, alias names, or the order of commutative predicates hash
   *differently* and report as drift. The tool errs toward false positives
@@ -208,8 +181,6 @@ caveats, not just the checksums. The ones we would not want a reader to miss:
 | Failure modes leave source untouched, destination disposable | Yes — export is read-only; every corruption case is its own throwaway clone |
 | Rerunnable in CI or a documented local harness | Local harness today. Needs only PostgreSQL 17 + pgvector, runs in about half a minute, needs no cloud project and costs nothing — **not yet wired into CI** |
 
-Remaining open items on our side: run the pipeline against a privacy-safe slice
-of real data; sign packages (a checksum answers "was this corrupted", not "who
-made this"); prove the perimeter claim on a hosted project where default
-privileges actually exist; and add a `promote_wiki()` so wiki lifecycle coverage
-matches memory lifecycle coverage.
+Target adoption separately requires qualified data/scope acceptance, package
+authenticity beyond checksums, the target's actual privilege profile, and explicit
+lifecycle coverage. A mechanism fixture is not that target-specific receipt.

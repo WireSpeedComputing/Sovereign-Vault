@@ -13,19 +13,21 @@ This is a protocol-level requirement about the *shape* of criteria, not an imple
 
 ## Shape 1 — denial-only criteria
 
-### Instance: the fixture failed, and every denial passed
+### Proposed synthetic controls
 
-A row-level policy suite for a scope-bound access model (`tests/36_rls_policies_TEST.sh`). The fixture inserts two principals, two scopes, one grant each, an identity binding per principal, and a handful of records. Then it asserts, through real request identity, that each principal cannot see the other's scope.
+In a fabricated two-principal/two-scope fixture, deliberately omit a required
+identity-binding review field. Fixture creation must abort. If a broken harness
+continues, every denial can pass because neither principal resolves. A valid
+fixture must first show each principal receives its own expected row.
 
-The fixture insert failed silently: a required review field was omitted from the identity binding, the binding was rejected by its own validation, and **no identity resolved for either principal**. Every denial assertion passed. Every one. A principal who resolves to nobody is denied everything, which is exactly what the suite was asking about.
+Separately revoke the fixture runtime's table SELECT privilege. The suite must
+distinguish a privilege error from a row-policy denial; a request that never
+reaches RLS cannot prove that RLS discriminates. The source paths are
+`tests/36_rls_policies_TEST.sh` and
+`sql/37_rls_authenticated_select_and_lifecycle.sql`.
 
-The suite reported almost-green. This happened twice before it was fixed properly.
-
-### Instance: the request never reached the thing being tested
-
-Separately, in the same deployment (`sql/37_rls_authenticated_select_and_lifecycle.sql`): the authenticated role held no table-level `SELECT` privilege, so requests were rejected at the privilege layer and the row-level policies never evaluated at all. The policies were installed, correct, and provably discriminating, and could not serve a row to anyone.
-
-Any test asserting "an ungranted user sees zero rows" passed **trivially**. Not because the policy denied the row — because the request died a layer earlier. Two entirely different causes, one signature: a negative result proves nothing when the request never reached the thing being tested.
+These are deliberately broken fixture designs, not renamed deployment events
+and not claims that the controls were executed.
 
 ### What fixed it
 
@@ -35,9 +37,15 @@ Stated as a rule: **a denial result is only evidence if a grant result from the 
 
 ## Shape 2 — checks that cannot fail
 
-The inversion. A perimeter checker (`sql/28_perimeter_assert_signal.sql`) enumerated grants to two platform-specific role names, on the assumption that those are the roles a hosted deployment exposes to the network.
+The inversion: a perimeter checker can filter on platform-specific role names,
+extension names, or another host assumption without first confirming its scope.
+`sql/28_perimeter_assert_signal.sql` is the relevant source surface to review.
 
-On the hosted platform it works. On a plain database — the local replay, the clean-restore verification, anyone else's deployment — **those roles do not exist**. The filter matches nothing, the check returns zero rows, and zero rows is the check's own definition of a clean perimeter. It ran. It exited zero. It verified nothing, on precisely the hosts where an independent party would run it to check our work.
+A proposed synthetic control removes a required fixture role or host object and
+requires an explicit unsupported/error outcome. If a checker instead filters on
+the absent identifier, it may return zero findings while evaluating nothing.
+The ordinary configured-host fixture must still pass. This is a method to run,
+not an account of a hosted or local operational incident.
 
 The general principle, and the reason this belongs in the spec rather than in a lint:
 
@@ -51,55 +59,24 @@ Because they are the honest instinct. Fail-closed is the right default and a den
 
 This matters more for a custody protocol than for most software, because the whole value proposition is a claim about what a system will not do. A suite that cannot distinguish "will not do the wrong thing" from "will not do anything" cannot support that claim.
 
-## The cleanest instance of the class, and it is ours
+## A literal verdict is not an assertion result
 
-Since drafting this we found the purest example either shape has produced, and
-it belongs here rather than in a footnote.
-
-A test file exists whose entire purpose is proving that one half of an access
-predicate actually discriminates — the half that, as it turned out, had never
-denied anything in production, because every row in the deployment carried the
-permissive value. The file is careful. It has positive controls, a
-null-assertion guard, and a section comment explaining that a NULL renders as a
-blank cell and reads as a pass to a grep-based runner.
-
-Its verdict line was, in full:
+A deliberately broken synthetic runner can print:
 
 ```sql
 SELECT 'SUITE_RESULT: PASS' AS verdict;
 ```
 
-A literal. The runner reads that line and nothing else. Every assertion in the
-file could have been false and it scored green.
+If the consumer reads only that literal, false or NULL assertions cannot change
+the verdict. A proposed mutation control replaces the protected predicate with
+a known-broken version and requires the complete runner to fail for that cause.
+The test must execute the mutation; a comment describing how to falsify it is
+not execution evidence.
 
-**The part that matters for this issue:** at the bottom of that same file, its
-author had written the falsification instruction —
-
-> revert the predicate to the pre-`coalesce` form and confirm D1 and D2 fail. If
-> they still pass, this file is not testing what its header claims.
-
-That instruction is correct. Carrying it out is exactly what surfaced the
-hardcoded verdict: the assertions did not fail, because nothing in the file
-could report a failure. **The instruction had never been run.**
-
-So the artifact encoded its own falsification test, shipped, and stayed green
-for as long as nobody executed the sentence it ended with. Writing a test and
-running a test are different acts, and a verification artifact can contain the
-precise recipe for its own refutation and still certify the thing it does not
-check.
-
-This is why the criterion below is phrased as *the conformance run executes the
-demonstration* rather than *a demonstration exists*. An unexecuted
-falsification instruction is documentation, and documentation of a check is not
-a check.
-
-Three further gates in the same suite turned out to be unread for a different
-reason: they predate a machine-readable verdict convention, so the runner scored
-them "PASS?" — printed, not counted — and the run reported clean at exit 0 with
-those suites unscored. One of them was emitting real failure markers into a text
-column at the time, for a live gap in a regulated-claims detector. Hence the
-separate criterion that a run containing an unresolved check cannot report full
-conformance.
+Likewise, a runner that prints unrecognized verdicts without counting them must
+report incomplete coverage. An unresolved, unsupported, or skipped check cannot
+be absorbed into an all-pass result. This is a generic runner contract, not an
+incident report or a statement about an adopter's corpus.
 
 ## Proposed conformance criteria
 

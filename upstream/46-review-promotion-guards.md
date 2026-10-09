@@ -126,8 +126,8 @@ eight open. They were not relaxed to fit the implementation.
 `GUARD_no_null_assertions` check. We added it after finding that a missing jsonb
 key yields NULL from `->>`, so `(x ->> 'k') = 'v'` is NULL rather than false;
 `bool_and()` ignores NULLs, `count(*) FILTER (WHERE NOT pass)` counts zero, and a
-harness grepping for a false marker sees a blank column. **21 of 24 assertions in
-one of our files "passed" against a function that lacked the feature entirely.**
+harness grepping for a false marker sees a blank column. A suite using those aggregates can report a pass even when the feature is
+absent; require an executed known-broken control.
 If your suites aggregate with `bool_and`, this is worth checking today.
 
 Happy to open a PR with the migration and the suite if the design looks right.
