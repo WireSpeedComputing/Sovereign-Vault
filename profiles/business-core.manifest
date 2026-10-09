@@ -1,0 +1,51 @@
+# Unapplied proposed business knowledge profile for a fresh database.
+# Closure is not certified until a compatible whole-source replay passes.
+# Whole checked-in files only; order is explicit, not a sql/*.sql glob.
+# Includes current canonical lifecycle, identity, retrieval/RLS and perimeter fixes.
+# Excludes supplier/product/claim/evidence/rule modules, task board and statements.
+# Pending candidates are excluded by default. Optional E denies reads until its
+# session seam is qualified. F is Supabase-specific and must be applied separately
+# after actual auth schema/session compatibility review; not a vanilla auth shim.
+sql/00_extensions.sql
+sql/01_core.sql
+sql/02_principals.sql
+sql/03_provenance.sql
+sql/04_temporal.sql
+sql/05_perimeter_assert.sql
+sql/06_import.sql
+sql/07_default_privileges.sql
+sql/08_advisor_fixes.sql
+sql/09_review_queue.sql
+sql/13_promotion_deadlock_fix.sql
+sql/14_owner_visibility_columns.sql
+sql/15_hot_index_no_destructive_eviction.sql
+sql/16_whitespace_class_rejection.sql
+sql/17_reject_memory.sql
+sql/19_schema_changelog_rls.sql
+sql/20_transition_concurrency_and_actor_custody.sql
+sql/21_governed_retrieval.sql
+sql/22_wiki_pages_source_agent_parity.sql
+sql/23_identity_capability_enforcement.sql
+sql/24_wiki_supersession.sql
+sql/25_public_request_has_capability.sql
+sql/26_propose_then_promote.sql
+sql/27_retrieval_acl_drift_fix.sql
+sql/28_perimeter_assert_signal.sql
+sql/30_scope_bound_authority.sql
+sql/31_is_owner_or_shared_total_function.sql
+sql/34_hard_delete_guard.sql
+sql/35_retrieval_topology.sql
+sql/36_rls_policies.sql
+sql/37_rls_authenticated_select_and_lifecycle.sql
+sql/39_custody_field_locks.sql
+sql/41_incremental_retrieval_projection.sql
+sql/43_custody_field_locks_wiki_pages.sql
+sql/44_perimeter_assert_not_evaluated.sql
+sql/46_truncate_revocation_and_table_level_perimeter.sql
+sql/47_reclassify_transition.sql
+sql/48_authorization_audit_judged_by.sql
+sql/52_audit_triggers_enable_always.sql
+sql/54_reserved_scope_baseline.sql
+sql/61_perimeter_report.sql
+sql/62_retrieve_context_serialized_budget.sql
+sql/62_supersede_by_existing.sql

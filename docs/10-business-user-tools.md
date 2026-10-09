@@ -18,8 +18,10 @@ principal, role, or grant. The same fixed dispatcher can serve an ordinary
 application, a small model, or a frontier model.
 
 The readiness reducer performs bounded evidence and coverage checks without an
-inference provider. It identifies blockers and missing information. It does not
-approve publication or manufacture an approval from a clean findings list.
+inference provider. Trusted server configuration defines the workflow, checks,
+finding rules, severity floors and next actions; the core has no industry
+taxonomy or default customer policy. It identifies blockers and missing
+information and never manufactures approval from a clean findings list.
 Stored text is untrusted evidence. It cannot change the caller's authority or
 the dispatcher configuration.
 
@@ -109,13 +111,47 @@ candidate grants authenticated callers canonical DML or private-schema access.
    cross-user, cross-team, denied-client and revoked-session controls. Prove the
    direct API reaches RLS and is denied on writes. Anonymous failure alone is
    insufficient.
-7. Add a request-bound, same-snapshot reader for business claim/evidence
-   reports before wiring the readiness reducer to live data. The existing
+7. Add a request-bound, same-snapshot reader for the deployment's workflow and
+   evidence before wiring the readiness reducer to live data. The existing
    privileged audit functions stay private. Capture expected/evaluated counts,
    versions, coverage gaps and review receipts. A partial report must remain
    partial.
 
-## Acceptance and limits
+## Minimal core profile
+
+`profiles/business-core.manifest` selects 43 complete historical SQL files in
+explicit dependency order. It excludes supplier/product/claim/evidence/formula,
+regulatory rules, optional task-board/statement modules and all `pending/`
+candidates. It seeds no customer principals, bindings, grants or records.
+This is a fresh-database source profile, not an upgrade script.
+
+On a POSIX test host with Node and an installed `pgvector/pgvector:pg17` image:
+
+```sh
+bash tests/business-core-pg17-acceptance.sh /absolute/private/receipt-parent
+```
+
+The receipt parent must exist outside the checkout. The harness copies each
+manifest SQL file byte-for-byte, applies the whole profile on PostgreSQL 17 with
+real vector and pgcrypto, verifies its table inventory and evaluated perimeter,
+then explicitly opts into E and a synthetic Auth seam for F acceptance. Base
+installation requires an authorized bootstrap administrator because the exact
+core creates extensions, roles and an event trigger. Runtime user requests still
+use authenticator/authenticated custody and E's non-bypass role.
+
+Tests verify E denies before F, actual canonical memory/wiki reads, scoped search,
+staged writes, exact retry/conflict, unchanged canonical rows, direct-DML denial
+and revoked sessions. The isolated container has no network or host ports and
+uses temporary data. Raw diagnostics and exact source hashes stay in the private
+receipt; cleanup addresses only the owned container and temporary directory.
+
+The separate `tests/business-core-acceptance.mjs` attempts whole-source PGlite
+replay with actual extensions and fails closed if the selected distribution
+cannot load them. PGlite 0.2.16's pgcrypto archive cannot load in the tested
+distribution; use the physical PostgreSQL 17 harness for the whole-profile proof.
+Do not interpret the smaller PGlite fixture below as full-schema replay.
+
+## Candidate-slice acceptance
 
 The JavaScript modules require no inference provider. Only the isolated SQL
 fixtures require a test runtime. From a fresh checkout on a POSIX test host:
@@ -160,14 +196,34 @@ database. They do not establish live OAuth, complete-schema replay, migration
 compatibility with a particular business deployment, or responsible human
 approval of business assets.
 
-Use `createBusinessReadinessReducer` only with a trusted, request-bound internal
-reader result. Matching a principal in JSON is not authentication. Its input is
-`business_readiness_snapshot_v1`, with four explicit check families
-(`claim_catalogue`, `claim_evidence`, `finished_copy`, `launch_assets`), expected
-and evaluated counts, findings, versioned source references and exact assets.
+Use `createBusinessReadinessReducer({ principalId, workstream, policy, now })`
+only in trusted application code after verifying identity. `now` is optional.
+Matching a principal in JSON is not authentication; `scopeMatched` reports
+consistency only. The policy is `business_readiness_policy_v1` and contains:
+
+- `workflowId` and a trusted publisher-supplied `policyRevision` (64 lowercase
+  hexadecimal characters). The reducer binds this revision; it does not compute
+  a policy hash.
+- `deliverableCheckId`, identifying the check that evaluates deliverables.
+- `checks`, each with an ID and `findingRules` containing `id`, `minSeverity`
+  (`medium`, `high` or `critical`) and `nextAction`.
+
+There are no default check IDs or finding types. Policy is copied from trusted
+configuration and cannot be supplied or changed by stored record text or tool
+arguments. The authorized reader emits `business_readiness_snapshot_v2`, bound
+to the same workflow and policy revision, with expected/evaluated counts,
+versioned citations and exact `deliverables`. Reports use
+`business_readiness_report_v2`. Older v1 snapshot inputs are rejected;
+update reader and reducer together rather than silently translating old policy.
+
 The reducer has no database, provider or write operation. It returns `blocked`,
-`unknown`, or `human_review_required`; it never returns an approval. Do not
-expose this snapshot as caller-supplied tool arguments.
+`unknown`, or `human_review_required`; it never returns approval. Missing scope
+redacts stored findings, source metadata and deliverable versions. Mismatched
+scope or policy rejects. Incomplete, stale or missing coverage adds explicit
+unknowns; an observed high/critical finding still makes the report `blocked`.
+Synthetic retail and SaaS cases exercise the same core. See the
+[adoption guide](14-business-platform-adoption.md). Do not expose the snapshot
+or policy as caller-supplied tool arguments.
 
 Staged observations and change requests do not become canonical truth. Review
 and promotion are a separate capability. A correction must cite the expected

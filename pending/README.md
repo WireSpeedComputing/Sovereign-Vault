@@ -1,69 +1,43 @@
-# pending/ — built but NOT approved, NOT applied
+# Candidate migrations
 
-Migrations here are complete or partially complete artifacts awaiting an owner
-decision. They are deliberately **not** in `sql/` because
-`tests/replay_fresh_install.sh` globs `sql/*.sql`; filing an unapproved
-migration there would make the replay harness prove something untrue about the
-deployment.
+Files here are excluded from the cumulative `sql/*.sql` replay. Their presence
+does not authorize application or describe a customer's deployment state.
+Qualify the selected target, exact source, ownership, grants, rollback and
+acceptance before applying a candidate.
 
-Nothing in this directory has been applied to any deployment.
+| File | Source purpose | Integration state |
+| --- | --- | --- |
+| `D_scope_hierarchy.sql` | Explicit declared scope containment | Held design candidate; review authority widening before adoption |
+| `D_scope_hierarchy_TEST.sql` | Synthetic hierarchy controls | Acceptance companion, not a migration |
+| `F_agent_registry_integrity_BLOCKED.sql` | Agent-registry integrity candidate | Blocked candidate; read its preconditions |
+| `F_agent_registry_integrity_TEST.sql` | Synthetic integrity controls | Acceptance companion, not a migration |
 
-| File | Upstream | State |
-|---|---|---|
-| `D_scope_hierarchy.sql` | #45 | **HELD BY THE OWNER — do not apply.** Widens authority; everything applied so far narrows it. |
+The additive business access candidates are available in
+[PR #37](https://github.com/WireSpeedComputing/Sovereign-Vault/pull/37):
 
-### Graduated
+| Exact filename | Purpose | Application constraint |
+| --- | --- | --- |
+| `E_business_user_tools.sql` | Four request-bound tools, restrictive reads and immutable staged submissions | PostgreSQL 16/17 candidate; E alone denies canonical client reads until the live-session gate is qualified |
+| `F_business_live_session.sql` | Actual Supabase live-session binding | Requires compatible Auth session metadata, reviewed client identity and session custody |
 
-`C_retrieval_projection_refresh.sql` was applied 2026-08-08 as migration 54 and
-now lives at `sql/41_incremental_retrieval_projection.sql`.
+Use exact filenames and source digests. Letter prefixes are historical
+organization labels, not a unique migration identifier or apply order.
 
-`B_retrieval_topology_ISSUE72.sql` and `E_rls_policies.sql` were approved and
-applied 2026-08-07 as deployment migrations 42 and 43. They now live at
-`sql/35_retrieval_topology.sql` and `sql/36_rls_policies.sql`, with their tests
-at `tests/35_*` and `tests/36_*`. `sql/30_scope_bound_authority.sql` went out as
-migration 41 in the same operation.
+## Related implemented patterns
 
-`A_wiki_supersession_ISSUE71.sql` was approved and applied as deployment
-migration 37 on 2026-08-07. It now lives at `sql/24_wiki_supersession.sql`.
-Upstream #71 is closed on this deployment.
+Wiki supersession, retrieval topology, scope/visibility composition and projection
+refresh are represented in `sql/24`, `sql/35`, `sql/36` and `sql/41`.
+Those source locations do not establish their installation on any deployment.
 
-## Before applying
+## Application discipline
 
-Re-run the preflight; the dry runs were point-in-time and the database has
-changed since.
+Capture target definitions and compare content, rather than migration names.
+Dependency closure must be explicit. Refresh projections only through their
+reviewed path, and test positive as well as denied access.
 
-For B: Part 2 must be built and tested first. Applying Part 1 alone creates a
-topology table that nothing reads, which is harmless but achieves nothing.
+Scope containment can widen authority. Add reviewed containment and grants
+deliberately; a scope's `confers_descendants` flag concerns its grant semantics,
+not a universal subtree seal.
 
-For C: it replaces no existing object and adds triggers to `memories` and
-`wiki_pages`. Confirm the deployment's projection is current (run
-`refresh_retrieval_units()` once) *before* applying, or the triggers will
-maintain a projection that was already stale — incremental maintenance corrects
-nothing retroactively. See the file header.
-
-## Why A includes a function
-
-Upstream #71 describes the `UNIQUE(path)` constraint as the blocker. Verified
-here that it is one of two: `enforce_bounded_status_transition` also rejects
-wiki status changes, and its sanctioned-function list names only
-`promote_memory` and `supersede_memory`, both memories-only. `wiki_pages` is
-append-only in practice. Replacing the constraint alone would not have
-restored supersession, so `supersede_wiki()` ships with it.
-
-For D: this is a real widening of authority, not a refactor. Apply it, then add
-child scopes one at a time and check `scope_effective_grants()` after each. A
-scope tree built in one motion is a tree nobody reviewed. Note also that
-`confers_descendants = false` on an intermediate does NOT seal a subtree — see
-the header.
-
-## A note on this file
-
-This table said Part 2 of B was "a design note only -- not written, not tested"
-for hours after Part 2 was built and tested, and was caught by an agent reading
-it rather than the file it describes. That is the second stale-summary defect
-found today, after STATUS.md kept "NOT YET APPLIED" on an applied migration.
-
-Both have the same shape: the artifact was updated, the index that points at it
-was not. An index that disagrees with what it indexes is worse than no index,
-because it is the cheaper thing to read. When a pending file changes state,
-change this table in the same commit.
+Keep source, index, tests and versioned integration instructions consistent.
+Record actual deployment decisions and receipts privately.

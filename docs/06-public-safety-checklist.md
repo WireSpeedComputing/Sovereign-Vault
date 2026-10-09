@@ -59,6 +59,12 @@ is the specific shape this is guarding against.
 
 ## Surfaces the scanner cannot see
 
+The platform must not expose a primary customer, an adopter's purpose or a
+private deployment adapter. Customer names, private repository links, source
+inventories, workflow policy, grants and operating state stay in authorized
+private systems. Review titles, comments, labels and release notes for indirect
+identification as well as literal names. Legal author attribution remains intact.
+
 The scanner reads the working tree and git history. Everything below is a
 publication surface it never touches. Each one has shipped a leak somewhere, in
 some project, for the same reason: it does not feel like publishing.

@@ -435,7 +435,28 @@ fi
 cd "$REPO_ABS" || die "cannot enter $REPO_ABS"
 
 IS_GIT=0
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 && IS_GIT=1
+GIT_WORK_TREE="$(git rev-parse --is-inside-work-tree 2>/dev/null)" || GIT_WORK_TREE=""
+[ "$GIT_WORK_TREE" = "true" ] && IS_GIT=1
+
+# A linked worktree has a .git FILE, not a directory. An invalid pointer,
+# unreadable metadata, or unavailable Git must not silently turn it into a
+# non-Git source folder and disable the requested history pass. Check ancestors
+# too, because REPO may be a subdirectory of the worktree.
+GIT_METADATA=0
+GIT_PROBE="$REPO_ABS"
+while :; do
+  if [ -e "$GIT_PROBE/.git" ] || [ -L "$GIT_PROBE/.git" ]; then
+    GIT_METADATA=1
+    break
+  fi
+  [ "$GIT_PROBE" = "/" ] && break
+  GIT_PARENT="$(dirname "$GIT_PROBE")"
+  [ "$GIT_PARENT" = "$GIT_PROBE" ] && break
+  GIT_PROBE="$GIT_PARENT"
+done
+if [ "$IS_GIT" -eq 0 ] && [ "$GIT_METADATA" -eq 1 ]; then
+  die "git metadata detected but repository cannot be read; refusing to skip history"
+fi
 
 CONFIG_REL=""
 case "$CONFIG_ABS" in
@@ -443,8 +464,17 @@ case "$CONFIG_ABS" in
 esac
 
 HAS_COMMITS=0
-if [ "$IS_GIT" -eq 1 ] && git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-  HAS_COMMITS=1
+if [ "$IS_GIT" -eq 1 ]; then
+  if git rev-parse --verify -q 'HEAD^{commit}' >/dev/null 2>&1; then
+    HAS_COMMITS=1
+  else
+    # A newly initialized repository may legitimately have an unborn branch.
+    # An existing but unreadable/detached HEAD is an environment error instead.
+    HEAD_REF="$(git symbolic-ref -q HEAD 2>/dev/null)" || die "cannot read git HEAD"
+    git show-ref --verify --quiet "$HEAD_REF" >/dev/null 2>&1
+    HEAD_REF_RC=$?
+    [ "$HEAD_REF_RC" -eq 1 ] || die "cannot read git HEAD commit"
+  fi
 fi
 
 EFFECTIVE_MODE="$MODE"
@@ -465,17 +495,18 @@ RAW_LIST="$WORK/raw.list"
 case "$EFFECTIVE_MODE" in
   all)
     if [ "$IS_GIT" -eq 1 ]; then
-      { git ls-files -z; git ls-files -z --others --exclude-standard; } >"$RAW_LIST" 2>/dev/null
+      { git ls-files -z || die "cannot enumerate tracked git files"
+        git ls-files -z --others --exclude-standard || die "cannot enumerate untracked git files"; } >"$RAW_LIST"
     else
       find . -type f -print0 >"$RAW_LIST" 2>/dev/null
     fi ;;
   changed)
-    { git diff --name-only -z --diff-filter=ACMR HEAD --
-      git ls-files -z --others --exclude-standard; } >"$RAW_LIST" 2>/dev/null ;;
+    { git diff --name-only -z --diff-filter=ACMR HEAD -- || die "cannot read changed git files"
+      git ls-files -z --others --exclude-standard || die "cannot enumerate untracked git files"; } >"$RAW_LIST" ;;
   base)
     git rev-parse --verify -q "$BASE_REF" >/dev/null 2>&1 || die "base ref not found: $BASE_REF"
-    { git diff --name-only -z --diff-filter=ACMR "$BASE_REF" --
-      git ls-files -z --others --exclude-standard; } >"$RAW_LIST" 2>/dev/null ;;
+    { git diff --name-only -z --diff-filter=ACMR "$BASE_REF" -- || die "cannot read base git files"
+      git ls-files -z --others --exclude-standard || die "cannot enumerate untracked git files"; } >"$RAW_LIST" ;;
 esac
 
 matches_any_glob() { # $1 = path, $2 = glob file
@@ -607,19 +638,20 @@ if [ "$DO_HISTORY" -eq 1 ] && [ "$IS_GIT" -eq 1 ] && [ "$HAS_COMMITS" -eq 1 ]; t
   # older than the depth is invisible, and "last 20 commits: clean" reads as
   # "history: clean" to everyone who is not the person who wrote the flag. So
   # the unscanned remainder is counted and named rather than left implicit.
-  TOTAL_COMMITS="$(git rev-list --count HEAD 2>/dev/null)" || TOTAL_COMMITS=0
-  case "$TOTAL_COMMITS" in ''|*[!0-9]*) TOTAL_COMMITS=0 ;; esac
+  TOTAL_COMMITS="$(git rev-list --count HEAD 2>/dev/null)" || die "cannot count git history"
+  case "$TOTAL_COMMITS" in ''|*[!0-9]*) die "invalid git history count" ;; esac
+  [ "$TOTAL_COMMITS" -gt 0 ] || die "git HEAD exists but history count is zero"
   UNSCANNED_COMMITS=0
 
   if [ "$HISTORY_DEPTH" -eq 0 ]; then
     say "== pass 3: git history (all $TOTAL_COMMITS commits) =="
-    git log -p --no-color 2>/dev/null >"$WORK/hist"
+    git log -p --no-color >"$WORK/hist" 2>/dev/null || die "cannot read git history"
   else
     if [ "$TOTAL_COMMITS" -gt "$HISTORY_DEPTH" ]; then
       UNSCANNED_COMMITS=$((TOTAL_COMMITS - HISTORY_DEPTH))
     fi
     say "== pass 3: git history (last $HISTORY_DEPTH of $TOTAL_COMMITS commits) =="
-    git log -n "$HISTORY_DEPTH" -p --no-color 2>/dev/null >"$WORK/hist"
+    git log -n "$HISTORY_DEPTH" -p --no-color >"$WORK/hist" 2>/dev/null || die "cannot read git history"
     if [ "$UNSCANNED_COMMITS" -gt 0 ]; then
       say "  $UNSCANNED_COMMITS COMMITS NOT SCANNED — a leak older than depth"
       say "  $HISTORY_DEPTH is invisible to this run, and deleting a file does not"
@@ -627,6 +659,8 @@ if [ "$DO_HISTORY" -eq 1 ] && [ "$IS_GIT" -eq 1 ] && [ "$HAS_COMMITS" -eq 1 ]; t
       note_hole "$UNSCANNED_COMMITS of $TOTAL_COMMITS commits were never read (history-depth $HISTORY_DEPTH)"
     fi
   fi
+
+  [ -s "$WORK/hist" ] || die "git history read returned no content"
 
   : >"$WORK/p3"
   if [ "$N_HARD" -gt 0 ]; then

@@ -1,119 +1,47 @@
-# Lineage
+# Architectural lineage
 
-This repo is seeded from the architecture published in
-[jryski/sovereign-memory-core](https://github.com/jryski/sovereign-memory-core)
-(personal, single-principal knowledge layer) and from a live multi-user
-business deployment on Supabase (two dozen production migrations over
-roughly six weeks). It is a new repository, not a fork or branch.
+Sovereign Vault is an independently maintained multi-user business platform.
+Public architectural influences include
+[jryski/sovereign-memory-core](https://github.com/jryski/sovereign-memory-core),
+a personal knowledge-layer design. This attribution describes design influence,
+not a customer, deployment or shared operating environment.
 
-## Why not a fork
+## Patterns carried forward
 
-Personal and business have permanently different trust models. The personal
-core assumes one owner and one trust boundary; the business core exists
-specifically because that assumption breaks with more than one person. A git
-fork implies shared history and upstream merges, which invites "keep it in
-sync" pressure — a parity trap this project explicitly rejects. Patterns
-transfer deliberately, via this document and direct review, not via git merge.
+- Separate generic knowledge governance from business domain schemas.
+- Enforce provenance in the database.
+- Preserve prior versions when correcting facts.
+- Treat vector retrieval as a regenerable projection.
+- Preserve imported sources before normalization.
+- Separate ownership from visibility.
+- Apply read-side ranking limits without deleting canonical history.
+- Reject whitespace-only required values.
+- Distinguish a citation string from a resolvable source locator.
 
-## Adopted as-is (structurally identical concept, reimplemented independently)
+## Adaptations for multiple users
 
-- Tiered structure: a generic knowledge/coordination layer, separate from
-  domain-specific canonical tables ("bring your own schema").
-- Provenance as a first-class, database-enforced concept rather than an
-  agent-discipline convention.
-- Corrections supersede; nothing is silently rewritten.
-- Vector search treated as a regenerable cache, never system of record.
-- Preserve-then-normalize import discipline for adopting external sources
-  (referenced in docs/01-architecture.md; not yet built out here — see
-  STATUS.md).
+Principals, reviewed identity bindings and finite capabilities replace
+single-owner assumptions. Authorization derives from the verified request;
+an actor identifier supplied by a client is not authority.
 
-## Adapted (same goal, different mechanism)
+Provenance is registry-driven so different consequential domain tables can
+participate. Temporal fields distinguish when a fact was observed, effective
+and recorded. Governed transitions protect custody and prior versions.
 
-- **Provenance basis** (`sql/03_provenance.sql`) generalizes a hardcoded
-  financial-provenance trigger from the reference deployment — built after a
-  fabricated figure in agent-generated output was caught in production —
-  into a registry-driven pattern any table can opt into.
-- **Temporal truth** (`sql/04_temporal.sql`): a multi-user business needs
-  "when was this true" answered independently of "when did we record it,"
-  which single-principal personal use doesn't force.
-- **Transaction-local GUC guard for sanctioned status transitions**
-  (`sql/13_promotion_deadlock_fix.sql`): matches the reference deployment's
-  `guard_canonical_write()` / `app.allow_canonical_write` precedent, applied
-  here to the promotion/supersession path specifically (`app.promoting`)
-  rather than a general canonical-write gate. Found and fixed one gap the
-  reference pattern's description didn't call out: the guard must be reset
-  immediately after its guarded statement, not left set until transaction
-  end, or it silently covers later statements in the same transaction too.
+The perimeter covers both relation grants and function execution. A complete
+evaluation result is required before treating the absence of reported
+violations as meaningful.
 
-## Adopted, relayed from a 2026-07-27 cross-instance report (not this repo's own finding)
+Business tools stage observations and proposed changes separately from canonical
+truth. A deployment can configure its own workflow checks without changing
+the shared tool registry or assigning approval to a model.
 
-The following four items were reported by the reference deployment's
-maintainers as defects found and fixed in their own July 25-27 rebuild,
-relayed as transferable design constraints rather than prescribed schema.
-Diffed against this repo's own ground truth before adopting; not adopted
-blindly.
+## Independent evolution
 
-- **Owner separate from visibility** (`sql/14_owner_visibility_columns.sql`):
-  relayed finding was that a visibility-only access model let
-  correctly-shared rows flood every user's session-boot payload anyway,
-  because nothing filtered by *owner* as a distinct axis. Confirmed the same
-  gap would exist here (no owner concept existed before this file) and
-  adopted the fix: owner is the present-day orientation axis, visibility is
-  a deferred privacy layer, and boot-surface functions filter on owner
-  explicitly rather than relying on visibility alone.
-- **No destructive hot-index eviction**
-  (`sql/15_hot_index_no_destructive_eviction.sql`): relayed finding was a
-  15-row cap that deleted the lowest-scoring row on each promotion,
-  destroying history. This repo had the identical defect, independently
-  introduced. Fixed the same way: the row cap belongs to the read-side
-  ranking view/function, never to the write path.
-- **Whitespace-class rejection**
-  (`sql/16_whitespace_class_rejection.sql`): relayed finding was that a
-  `btrim()`-only emptiness check misses all-tab/all-newline values. This
-  repo had no emptiness check at all on the relevant columns before this
-  file (worse than the reported defect, not better) — added the
-  whitespace-class version directly rather than a weaker one first.
-- **Evidence-locator resolvability is not evidence-string presence**
-  (see STATUS.md, "Evidence-locator audit"): relayed finding was that a
-  NOT NULL constraint on a citation-style column had shipped alongside three
-  citations that didn't actually resolve to anything, including one naming
-  an artifact that never existed. This repo's own audit (report-only, this
-  session) did not find a citation naming something that provably never
-  existed, but did find a category of prose "session reference" citations
-  with no independently checkable locator — the same class of problem,
-  named here so it doesn't get treated as solved just because a NOT NULL
-  constraint already exists (`sql/03_provenance.sql`).
+Patterns transfer through explicit review. This project does not assume schema
+parity, automatic upstream merges or one business domain. Public example modules
+are optional references; customer adapters and policies remain private.
 
-**Explicitly not adopted this pass, raised as GitHub issues instead** (exact
-serialized-budget monotonicity, append-only attention events with source
-semantics, historical-import segregation, project/topic/artifact grain
-discipline): all four presuppose a digest builder or event substrate that
-does not exist in this repo yet. Recording the constraint now, before
-building either, rather than building first and retrofitting.
-
-## New in this repo, not present in the personal core
-
-- **Principals and capability grants** (`sql/02_principals.sql`). The personal
-  core has no concept of multiple humans with different access; this is the
-  entire reason the business version exists. See STATUS.md for the open
-  question this doesn't fully close (shared service-role connection).
-- **Perimeter assert covering table grants** (`sql/05_perimeter_assert.sql`).
-  Built in response to a production finding: Supabase auto-grants SELECT to
-  `anon`/`authenticated` on new `public` tables by default, and a perimeter
-  check that only inspects function execute grants misses this entirely.
-  That finding is why this file checks both.
-
-## Explicitly NOT carried over
-
-- Any single-owner assumption. Nothing in this repo should ever assume there
-  is exactly one human principal.
-- Personal-domain schemas (household, homelab, etc.) — out of scope entirely.
-- Any of the reference deployment's data. Schema in the repo, data in the
-  database — see README.
-
-## A note on accuracy
-
-This document describes the personal core based on its published README, not
-a file-by-file diff of its SQL. If any claim above about that repo's
-internals turns out to be wrong once someone actually diffs the two, this
-document is what to correct.
+[NOTICE](NOTICE) preserves legal attribution. No private customer data, deployment
+timeline, incident narrative or operating metrics are needed to explain these
+architectural choices.

@@ -1,21 +1,20 @@
 ## Summary
 
 SQL's three-valued logic can silently disable verification and enforcement at
-three independent layers. We found instances at two of them on the same day, in
-the same deployment, by accident — one in a test harness, one in a security
-predicate. The third layer is safe in our schema only because of a pairing that
-was never written down as a requirement.
+three independent layers: test aggregates, negated security predicates, and
+CHECK constraints. The examples below are portable SQL reasoning and proposed
+fixture controls, not a report of a deployment incident.
 
 This is a protocol-level hazard rather than an implementation bug: any store
 built on these patterns is exposed unless the requirement is explicit.
 
 ## Layer 1 — assertions that pass without asserting
 
-A test suite reported 24 of 24 passing. Run against a function that lacked the
-feature entirely, only 3 failed. **21 assertions could not distinguish a working
-implementation from a broken one.**
+A NULL assertion can be omitted by an aggregate and appear as a blank output
+cell. A proposed broken-feature fixture must be rejected even when a missing
+JSON key makes its comparison NULL.
 
-The chain, verified at each step on PostgreSQL 17:
+The SQL evaluation chain:
 
 ```
 '{"a":1}'::jsonb ->> 'missing'                     -> NULL
@@ -56,8 +55,8 @@ IF NOT is_owner_or_shared(...) THEN RAISE EXCEPTION ...;  -- NOT NULL is NULL
 ```
 
 The danger is that the function is correct for existing callers and a trap for
-the next one. We caught this immediately before adding row-level policies built
-on the same predicate.
+the next one. A row-policy adoption review should include both positive and negated call
+sites for the same predicate.
 
 Note that marking such a function `STRICT` **reintroduces** the defect, since
 STRICT returns NULL whenever any argument is NULL. The NULL handling has to be
@@ -87,9 +86,8 @@ its result:
 
 - `bool_and()` consumed a NULL assertion and reported success
 - a runner consumed a NULL as a blank cell and reported no failure
-- a shell pipeline consumed a failing checker through `grep`, so the pipeline
-  reported grep's exit status rather than the checker's, and a real leak was
-  published
+- a shell pipeline can consume a failing checker through `grep` and report
+  the consumer's exit status instead of the checker's
 
 Three different consumers, same failure. **The gate is rarely the weak part; the
 thing reading the gate is.** Worth stating explicitly in any conformance
@@ -110,8 +108,8 @@ guidance, because reviewers naturally scrutinise the check and not its caller.
    implementation to prove it discriminates. A suite that has never failed is
    not evidence that the system is correct; it is evidence of nothing.
 
-Item 5 is what surfaced this. The suite was green; running it against the
-pre-fix function is what exposed that 21 of 24 assertions were inert.
+Item 5 requires an executed mutation control. A written recipe for checking a
+known-broken function is not evidence that the runner rejects it.
 
 ## Reproduction
 
