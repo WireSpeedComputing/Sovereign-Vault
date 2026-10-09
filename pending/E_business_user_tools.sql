@@ -75,12 +75,15 @@ returns boolean language sql stable security definer set search_path=pg_catalog 
 revoke all on function public.authorized_business_session_active_v1() from public,anon,authenticated;
 grant execute on function public.authorized_business_session_active_v1() to authenticated;
 -- This intentionally narrows the existing direct Data API SELECT path as well:
--- current scope/visibility policies remain, AND a qualified live mapped-client
--- session is required. Native clients need qualified business-client mappings.
+-- current scope/visibility AND a qualified live mapped-client session remain
+-- mandatory even if another permissive policy applies to PUBLIC. Native clients
+-- need qualified business-client mappings. No existing grants are widened.
 create policy business_session_memories_read on public.memories as restrictive for select to authenticated
-  using(public.authorized_business_session_active_v1());
+  using(public.authorized_business_session_active_v1()
+    and status='current' and public.can_read_row_as_request(owner,visibility,workstream));
 create policy business_session_wiki_read on public.wiki_pages as restrictive for select to authenticated
-  using(public.authorized_business_session_active_v1());
+  using(public.authorized_business_session_active_v1()
+    and status='current' and public.can_read_row_as_request(owner,visibility,workstream));
 
 -- These predicates do not widen the authenticated policy. New role receives
 -- only the columns used by these RPCs, SELECT only, with actual RLS filtering.
@@ -91,6 +94,12 @@ grant select(id,title,content,workstream,tags,source_kind,source_ref,status,prov
 create policy business_tools_memories_read on public.memories for select to business_user_tools_v1
   using(status='current' and public.can_read_row_as_request(owner,visibility,workstream));
 create policy business_tools_wiki_read on public.wiki_pages for select to business_user_tools_v1
+  using(status='current' and public.can_read_row_as_request(owner,visibility,workstream));
+-- Permissive policies enable these reads; restrictive predicates prevent an
+-- unrelated permissive PUBLIC policy from OR-widening the finite runtime role.
+create policy business_tools_memories_read_boundary on public.memories as restrictive for select to business_user_tools_v1
+  using(status='current' and public.can_read_row_as_request(owner,visibility,workstream));
+create policy business_tools_wiki_read_boundary on public.wiki_pages as restrictive for select to business_user_tools_v1
   using(status='current' and public.can_read_row_as_request(owner,visibility,workstream));
 
 create view business_user_tools_private.current_records_v1 with(security_invoker=true) as

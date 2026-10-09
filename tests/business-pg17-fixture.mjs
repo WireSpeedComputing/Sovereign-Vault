@@ -26,6 +26,10 @@ grant select on public.memories,public.wiki_pages to authenticated;
 create policy memories_read on public.memories for select to authenticated using(status='current' and public.can_read_row_as_request(owner,visibility,workstream));
 create policy wiki_pages_read on public.wiki_pages for select to authenticated using(status='current' and public.can_read_row_as_request(owner,visibility,workstream));`);
 sql.push(await read('pending/E_business_user_tools.sql'),await read('pending/F_business_live_session.sql'));
+// Adversarial composition control: an unrelated permissive PUBLIC policy must
+// not widen either authenticated direct reads or the finite RPC owner role.
+sql.push(`create policy synthetic_public_read on public.memories for select to public using(true);
+create policy synthetic_public_read on public.wiki_pages for select to public using(true);`);
 for(const name of ['alice','bob','clientA','clientB']) {
   const p=f[name],human=!!p.userId;
   sql.push(`insert into public.principals(id,kind,display_name) values(${literal(p.principalId)},${literal(human?'human':'agent')},${literal('Synthetic '+name)});
@@ -35,6 +39,14 @@ values(${literal(human?'auth_subject':'oauth_client')},${literal(f.issuer)},${li
 for(const name of ['alice','bob','clientA'])sql.push(`insert into public.capability_grants(principal_id,resource_scope,permissions) values(${literal(f[name].principalId)},${literal(f.scope)},'{read,propose}');`);
 sql.push(`insert into auth.sessions(id,user_id,oauth_client_id) values(${literal(f.alice.sessionId)},${literal(f.alice.userId)},${literal(f.clientA.clientId)});
 insert into public.memories(id,content,workstream,owner,visibility,provenance_basis,citation,tags) values(${literal(f.currentId)},${literal(f.content)},'operations',${literal(f.alice.principalId)},'shared','source_document','synthetic citation','{address,NULL,office}');
+insert into public.memories(id,content,workstream,owner,visibility) values
+  (${literal(f.otherScopeId)},'Business address outside permitted scope','finance',${literal(f.alice.principalId)},'shared'),
+  (${literal(f.privateId)},'Business address private to another synthetic owner','operations',${literal(f.bob.principalId)},'private');
+insert into public.memories(id,content,workstream,owner,visibility,status) values
+  (${literal(f.proposedId)},'Business address proposed synthetic record','operations',${literal(f.alice.principalId)},'shared','proposed'),
+  (${literal(f.supersededId)},'Business address historical synthetic record','operations',${literal(f.alice.principalId)},'shared','superseded');
+insert into public.wiki_pages(id,title,content,workstream,owner,visibility) values
+  (${literal(f.wikiId)},'Finance reference','Business address outside wiki scope','finance',${literal(f.alice.principalId)},'shared');
 reset session authorization;`);
 const claims={iss:f.issuer,sub:f.alice.userId,role:'authenticated',client_id:f.clientA.clientId,session_id:f.alice.sessionId,is_anonymous:false,exp:Math.floor(Date.now()/1000)+3600};
 const get={memoryId:f.currentId};
@@ -52,6 +64,16 @@ begin
   if jsonb_array_length(result->'records')<>1 then raise exception 'PG17 ordinary-question search failed'; end if;
   select count(*) into n from public.memories;
   if n<>1 then raise exception 'PG17 direct positive read failed'; end if;
+  select count(*) into n from public.wiki_pages;
+  if n<>0 then raise exception 'PG17 PUBLIC policy widened direct wiki scope'; end if;
+  result:=public.authorized_business_memory_get_v1(jsonb_build_object('memoryId',${literal(f.privateId)}));
+  if result->'record' is distinct from 'null'::jsonb then raise exception 'PG17 PUBLIC policy widened RPC private visibility'; end if;
+  result:=public.authorized_business_memory_get_v1(jsonb_build_object('memoryId',${literal(f.otherScopeId)}));
+  if result->'record' is distinct from 'null'::jsonb then raise exception 'PG17 PUBLIC policy widened RPC scope'; end if;
+  result:=public.authorized_business_memory_get_v1(jsonb_build_object('memoryId',${literal(f.proposedId)}));
+  if result->'record' is distinct from 'null'::jsonb then raise exception 'PG17 PUBLIC policy exposed proposed content'; end if;
+  result:=public.authorized_business_memory_get_v1(jsonb_build_object('memoryId',${literal(f.supersededId)}));
+  if result->'record' is distinct from 'null'::jsonb then raise exception 'PG17 PUBLIC policy exposed historical content'; end if;
   first:=public.authorized_business_memory_append_observation_v1(${literal(JSON.stringify(append))}::jsonb);
   second:=public.authorized_business_memory_append_observation_v1(${literal(JSON.stringify(append))}::jsonb);
   if first->>'observationId' is distinct from second->>'observationId' or second->>'replayed' is distinct from 'true' then raise exception 'PG17 replay failed'; end if;

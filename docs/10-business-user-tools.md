@@ -73,7 +73,12 @@ copied into stored evidence or represented as a missing record.
 E adds `AS RESTRICTIVE` authenticated SELECT policies to both canonical tables.
 They require the public no-argument boolean
 `authorized_business_session_active_v1()` in addition to the existing row
-predicates. F binds that gate to the actual `auth.sessions` row, subject,
+predicates. The restrictive expressions explicitly require current status and
+the composed owner/visibility plus human/client row predicate. The finite
+runtime role also has restrictive current/row guards alongside its permissive
+read enablement. An unrelated permissive PUBLIC policy cannot widen either
+of these two canonical read paths. F binds the session gate to the actual
+`auth.sessions` row, subject,
 OAuth client and validity period. This narrows direct Data API reads as well as
 the RPC profile: native clients need reviewed identity/client mappings and a
 qualified client-bound session. Review those clients before applying E/F.
@@ -138,7 +143,9 @@ This generates the same synthetic identity/RLS slice, installs E/F with a
 non-superuser migration controller, and checks read/replay/direct-read revocation.
 Three separate-session controls verify bounded target-lock contention,
 same-key write contention, and the proposal's SHARE lock against a competing
-canonical update. The container has no network or host ports, uses temporary
+canonical update. Adversarial PUBLIC read policies and hidden scope/private/
+lifecycle fixtures verify that unrelated permissive policies cannot widen the
+candidate RPC or direct reads. The container has no network or host ports, uses temporary
 data, and is removed when the run finishes. This is candidate-slice acceptance,
 not a complete-schema replay or proof of a live OAuth client.
 

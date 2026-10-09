@@ -130,6 +130,69 @@ export async function adminSql(db,sql,params=[]) {
   try { return await db.query(sql,params); } finally { await db.exec('SET SESSION AUTHORIZATION postgres'); }
 }
 
+/** Deliberately broad PUBLIC policies must not widen either supported read path.
+ * Temporary synthetic rows/policies are removed before the baseline continues.
+ */
+export async function runPolicyCompositionAcceptance(db) {
+  let checks=0;
+  const check=(value,expected,label)=>{assert.deepEqual(value,expected,label);checks++;};
+  const ids={private:'71000000-0000-4000-8000-000000000002',scope:'71000000-0000-4000-8000-000000000003',
+    proposed:'71000000-0000-4000-8000-000000000004',superseded:'71000000-0000-4000-8000-000000000005'};
+  const invoke=(name,input,options={})=>invokeRpcAs(db,options,`authorized_business_memory_${name}_v1`,input);
+  const directIds=async(relation,options={})=>(await executeAs(db,options,`SELECT id FROM public.${relation} ORDER BY id`)).rows.map(row=>row.id);
+  try {
+    for(const [kind,workstream,status,visibility] of [
+      ['private','operations','current','private'],['scope','finance','current','shared'],
+      ['proposed','operations','proposed','shared'],['superseded','operations','superseded','shared']
+    ]) await adminSql(db,`INSERT INTO public.wiki_pages(id,title,content,workstream,status,owner,visibility,provenance_basis,citation)
+      VALUES($1,'Synthetic policy composition','Synthetic policy composition business address',$2,$3,$4,$5,'source_document','synthetic policy composition')`,
+      [ids[kind],workstream,status,SYNTHETIC.alice.principalId,visibility]);
+    await adminSql(db,'CREATE POLICY fixture_public_memories_read ON public.memories FOR SELECT TO public USING(true)');
+    await adminSql(db,'CREATE POLICY fixture_public_wiki_read ON public.wiki_pages FOR SELECT TO public USING(true)');
+    check((await db.query(`SELECT count(*)::int AS n FROM pg_policy WHERE polname IN
+      ('fixture_public_memories_read','fixture_public_wiki_read') AND polpermissive AND polroles=ARRAY[0::oid]`)).rows[0].n,
+      2,'broad PUBLIC permissive policies genuinely installed');
+    check((await db.query(`SELECT count(*)::int AS n FROM pg_policy WHERE polname IN
+      ('business_session_memories_read','business_session_wiki_read','business_tools_memories_read_boundary','business_tools_wiki_read_boundary') AND NOT polpermissive`)).rows[0].n,
+      4,'both roles have independent restrictive SELECT boundaries');
+    for(const actor of ['alice','bob']) {
+      const options={actor};
+      const memoryIds=actor==='alice'?[SYNTHETIC.currentId,SYNTHETIC.privateId]:[SYNTHETIC.currentId];
+      const wikiIds=actor==='alice'?[SYNTHETIC.wikiId,ids.private]:[SYNTHETIC.wikiId];
+      check(await directIds('memories',options),memoryIds,'PUBLIC policy direct memories remain exact current authorized set');
+      check(await directIds('wiki_pages',options),wikiIds,'PUBLIC policy direct wiki remain exact current authorized set');
+      check((await invoke('get',{memoryId:SYNTHETIC.currentId},options)).record.id,SYNTHETIC.currentId,'PUBLIC policy RPC positive current memory');
+      check((await invoke('get',{memoryId:SYNTHETIC.wikiId,relation:'wiki_pages'},options)).record.id,SYNTHETIC.wikiId,'PUBLIC policy RPC positive current wiki');
+      for(const id of [SYNTHETIC.otherScopeId,SYNTHETIC.proposedId,SYNTHETIC.supersededId])
+        check((await invoke('get',{memoryId:id},options)).record,null,'PUBLIC policy memory scope/status cannot widen RPC');
+      for(const id of [ids.scope,ids.proposed,ids.superseded])
+        check((await invoke('get',{memoryId:id,relation:'wiki_pages'},options)).record,null,'PUBLIC policy wiki scope/status cannot widen RPC');
+      check((await invoke('get',{memoryId:SYNTHETIC.privateId},options)).record?.id??null,
+        actor==='alice'?SYNTHETIC.privateId:null,'PUBLIC policy private memory owner boundary survives');
+      check((await invoke('get',{memoryId:ids.private,relation:'wiki_pages'},options)).record?.id??null,
+        actor==='alice'?ids.private:null,'PUBLIC policy private wiki owner boundary survives');
+      check((await invoke('search',{query:'business address'},options)).records.map(row=>row.id).sort(),
+        [...memoryIds,...wikiIds].sort(),'PUBLIC policy actual search contains only exact authorized records');
+    }
+    const alternate={client:'clientB',claims:{session_id:SYNTHETIC.alternateSessionId}};
+    for(const relation of ['memories','wiki_pages']) {
+      check(await directIds(relation,alternate),[],'PUBLIC policy direct client without capability remains denied');
+      check(await directIds(relation,{claims:{exp:0}}),[],'PUBLIC policy direct expired session remains denied');
+    }
+    check((await invoke('search',{query:'business address'},alternate)).records,[],'PUBLIC policy mapped client cannot replace missing scope grant');
+    await assert.rejects(()=>invoke('get',{memoryId:SYNTHETIC.currentId},{claims:{exp:0}}),error=>error.code==='PT403');checks++;
+  } finally {
+    await adminSql(db,'DROP POLICY IF EXISTS fixture_public_memories_read ON public.memories');
+    await adminSql(db,'DROP POLICY IF EXISTS fixture_public_wiki_read ON public.wiki_pages');
+    await adminSql(db,'DELETE FROM public.wiki_pages WHERE id=ANY($1::uuid[])',[Object.values(ids)]);
+  }
+  check((await db.query(`SELECT count(*)::int AS n FROM pg_policy WHERE polname IN
+    ('fixture_public_memories_read','fixture_public_wiki_read')`)).rows[0].n,0,'broad synthetic policies cleaned before baseline');
+  check(await directIds('memories'),[SYNTHETIC.currentId,SYNTHETIC.privateId],'baseline scoped memory reads remain exact');
+  check(await directIds('wiki_pages'),[SYNTHETIC.wikiId],'baseline scoped wiki reads restored');
+  return checks;
+}
+
 export async function runAcceptance() {
   const db=await createBusinessFixtureDatabase(); let checks=0; let phase='role and read checks';
   const check=(value,expected,label)=>{ assert.deepEqual(value,expected,label); checks++; };
@@ -152,6 +215,9 @@ export async function runAcceptance() {
     check(exact.record.tags,['address','office'],'exact get removes NULL tag and preserves remaining order');
     check((await executeAs(db,{},'SELECT count(*)::int AS n FROM public.memories')).rows[0].n,2,'positive direct SELECT current authorized memories count pinned');
     check((await executeAs(db,{},'SELECT count(*)::int AS n FROM public.wiki_pages')).rows[0].n,1,'positive direct SELECT current authorized wiki count pinned');
+    phase='PUBLIC policy composition';
+    checks+=await runPolicyCompositionAcceptance(db);
+    phase='role and read checks';
     check((await db.query('SELECT count(*)::int AS n FROM public.perimeter_assert()')).rows[0].n,0,'reviewed API perimeter declarations complete');
     check(exact.record.status,'current','current accepted facts only');check(exact.record.provenance.citation,'synthetic citation','citation retained');check(exact.completeness.status,'complete','completeness explicit');
     const search=await invoke('search',{query:'business address'});check(search.records.some(r=>r.id===SYNTHETIC.currentId),true,'paraphrase lexical read');
