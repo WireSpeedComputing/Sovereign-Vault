@@ -1,56 +1,12 @@
 -- 39_custody_field_locks.sql
---
 -- MIGRATION: 51_custody_field_locks
---
--- Chain-of-custody field locking. Closes the protocol's PRINCIPAL requirement,
--- on which this deployment was at literal zero.
---
--- ══════════════════════════════════════════════════════════════════════════
--- WHAT WAS ACTUALLY TRUE BEFORE THIS
--- ══════════════════════════════════════════════════════════════════════════
--- Probed live rather than assumed. recorded_at, provenance_basis, source_agent
--- and content were ALL rewritable in place. `supersedes` only appeared
--- protected because the probe passed a UUID that failed a foreign key — that is
--- referential integrity, not a custody lock. Functionally, zero custody fields
--- were locked.
---
--- The exposure: anyone holding the shared service credential — which is every
--- agent — could silently rewrite WHO recorded something, WHEN, UNDER WHAT
--- AUTHORITY, and WHAT IT SAID. Provenance triggers validated that values were
--- well-formed AT WRITE and did nothing to prevent changing them afterward.
---
--- Stated generally, because it is the reusable lesson: enforcement at insert
--- without immutability after is not custody. It is a well-formedness check
--- wearing custody's clothes, and it reads as protection to anyone auditing the
--- trigger list rather than probing the behaviour.
---
--- ══════════════════════════════════════════════════════════════════════════
--- LOCKED vs MUTABLE, and why the split is not arbitrary
--- ══════════════════════════════════════════════════════════════════════════
--- LOCKED — the custody claim itself: identity; recorded, observed and effective
--- times; provenance basis; citation; source kind and agent; the supersession
--- pointer; and content. Corrections append a successor through
--- supersede_memory(); they never rewrite the original claim.
---
--- MUTABLE — lifecycle and classification: status, effective_to, due_date,
--- due_status, tags, workstream, owner, visibility, metadata, updated_at.
--- Locking these would break promotion, rejection, supersession and deadline
--- management.
---
--- That second list is the part worth testing rather than reasoning about. All
--- three sanctioned transitions were exercised against this trigger before it
--- was applied and again after: promote, supersede and reject all succeed, every
--- locked field is rejected, and lifecycle updates still work. A custody lock
--- that also froze lifecycle would look identical in a trigger listing and would
--- break the system silently at the first correction.
---
--- ══════════════════════════════════════════════════════════════════════════
--- ORDERING
--- ══════════════════════════════════════════════════════════════════════════
--- Agent attribution had to be resolved by MAPPING (previous migration) before
--- this landed, because afterwards source_agent cannot be rewritten even to
--- correct it. That is the intended property. Any registry correction must
--- happen before the locks, or be expressed as a mapping rather than an edit.
+-- Lock the original custody claim after recording: content, attribution,
+-- provenance and temporal identity. Corrections create linked successors.
+-- Lifecycle and authorization-input changes use their reviewed transitions.
+-- Test a valid referenced replacement value as well as malformed values:
+-- foreign-key rejection alone does not prove custody immutability.
+-- Administrative credentials and trigger-control privileges require separate
+-- review; a custody lock does not authenticate a request.
 
 create or replace function enforce_custody_field_locks()
 returns trigger language plpgsql as $fn$

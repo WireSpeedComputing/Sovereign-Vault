@@ -423,6 +423,84 @@ expect_rc 1 "--ci still fails on planted secrets"
 expect_has "SWEEP FAILED" "a real finding is still reported as a finding"
 
 # ===========================================================================
+section "linked worktrees: real history is scanned and unreadable metadata fails closed"
+# ===========================================================================
+# These are real Git worktrees with .git files. Both current trees are clean;
+# only repo1's retained history contains protected fixture text.
+g -C "$ROOT/repo1" worktree add --detach -q "$ROOT/worktree-dirty" HEAD || {
+  echo "dirty worktree fixture setup failed" >&2; exit 1;
+}
+g -C "$ROOT/repo3" worktree add --detach -q "$ROOT/worktree-clean" HEAD || {
+  echo "clean worktree fixture setup failed" >&2; exit 1;
+}
+[ -f "$ROOT/worktree-dirty/.git" ] && [ -f "$ROOT/worktree-clean/.git" ] || {
+  echo "fixtures are not linked Git worktrees" >&2; exit 1;
+}
+sweep --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/worktree-dirty"
+expect_rc 1 "real worktree fails on a planted historical leak after cleanup"
+expect_has "FOUND IN HISTORY" "worktree finding is attributed to history"
+expect_has "git history (all 5 commits)" "dirty worktree history count is positive"
+expect_lacks "SWEEP CLEAN" "historical worktree leak cannot report clean"
+
+sweep --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/worktree-clean"
+expect_rc 0 "clean real worktree passes"
+expect_has "git history (all 4 commits)" "clean worktree actually reads nonempty history"
+expect_has "SWEEP CLEAN" "clean worktree reaches a real verdict"
+
+# A Windows-created worktree pointer can be unreadable under a POSIX Git. This
+# fabricated invalid pointer must not fall back to a non-Git folder. The nested
+# directory control proves the metadata hint is not limited to REPO/.git.
+mkdir -p "$ROOT/broken-worktree/nested"
+printf 'ordinary source\n' >"$ROOT/broken-worktree/nested/file.md"
+printf 'gitdir: C:/fabricated-missing-worktree-metadata\n' >"$ROOT/broken-worktree/.git"
+sweep --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/broken-worktree"
+expect_rc 2 "unreadable .git pointer is an error"
+expect_has "git metadata detected but repository cannot be read" "broken pointer fails for metadata cause"
+expect_lacks "SWEEP CLEAN" "broken pointer never prints clean"
+sweep --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/broken-worktree/nested"
+expect_rc 2 "unreadable ancestor .git pointer is an error"
+expect_lacks "SWEEP CLEAN" "nested broken worktree never prints clean"
+
+# Genuine non-Git source folders retain the documented full-file scan behavior.
+sweep --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/clean"
+expect_rc 0 "non-Git source folder still permits a full file scan"
+expect_has "SWEEP CLEAN" "non-Git file scan reaches its intended verdict"
+
+# A real repository can resolve HEAD while an older loose commit is missing.
+# Corrupt only this disposable fixture; the original repository is untouched.
+mkdir -p "$ROOT/repo-history-broken"
+(
+  cd "$ROOT/repo-history-broken" || exit 1
+  g init -q . || exit 1
+  printf 'ordinary source\n' >file.md
+  g add -A && g commit -q -m first || exit 1
+  FIRST_COMMIT="$(git rev-parse HEAD)" || exit 1
+  printf 'another ordinary line\n' >>file.md
+  g add -A && g commit -q -m second || exit 1
+  rm -f ".git/objects/${FIRST_COMMIT:0:2}/${FIRST_COMMIT:2}" || exit 1
+) || { echo "unreadable history fixture setup failed" >&2; exit 1; }
+sweep --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/repo-history-broken"
+expect_rc 2 "missing historical commit fails closed after HEAD resolves"
+expect_has "cannot count git history" "unreadable history names the counting error"
+expect_lacks "SWEEP CLEAN" "unreadable commit history never prints clean"
+
+# A history reader error after successful enumeration must also fail, rather
+# than scanning its empty output as clean. The shim delegates every other Git
+# operation to real Git, so this isolates log failure from repository detection.
+REALGIT="$(command -v git)" || exit 1
+mkdir -p "$ROOT/git-log-fail"
+cat >"$ROOT/git-log-fail/git" <<EOS
+#!/bin/sh
+[ "\$1" = log ] && exit 73
+exec "$REALGIT" "\$@"
+EOS
+chmod +x "$ROOT/git-log-fail/git"
+OUT="$(PATH="$ROOT/git-log-fail:$PATH" bash "$SWEEP" --config "$ROOT/sweep.config" --all --history-depth 0 --ci "$ROOT/worktree-clean" 2>&1)"; RC=$?
+expect_rc 2 "git log reader failure is an error"
+expect_has "cannot read git history" "log failure is not misclassified as no findings"
+expect_lacks "SWEEP CLEAN" "failed log reader never prints clean"
+
+# ===========================================================================
 printf '\n=========================================\n'
 printf 'passed: %s   failed: %s\n' "$PASSED" "$FAILED"
 if [ "$FAILED" -ne 0 ]; then

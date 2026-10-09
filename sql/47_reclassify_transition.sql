@@ -1,49 +1,13 @@
 -- 47_reclassify_transition.sql
---
+-- Treat owner, visibility, and workstream as governed authorization inputs.
+-- Reclassification is an explicit attributed transition with a reason and
+-- before/after audit record; it is not an unrecorded in-place classification edit.
+-- Preserve custody fields and expected-state checks across the sanctioned path.
+-- Legacy caller-asserted actor forms need a trusted request boundary before
+-- routine client exposure; administrative sanction flags are not authentication.
 -- MIGRATION: 63_reclassify_transition_and_authorization_input_locks
 -- MIGRATION: 65_reclassify_record_cast_owner_and_visibility
---
--- WO-14 Phase 2a and 2b. Ruling already made by the owner; this implements it.
---
--- NUMBERING: this file deploys BEFORE sql/45 and sql/46, which are still being
--- written. The repo convention is numbering by deployment order, so a single
--- renumbering pass is owed once nothing is in flight. Recorded here rather than
--- renumbered mid-run, because renaming files another process is writing is how
--- one of them gets lost.
---
--- ══════════════════════════════════════════════════════════════════════════
--- WHY THE TRANSITION IS BUILT BEFORE THE CLASSIFICATION
--- ══════════════════════════════════════════════════════════════════════════
--- Classifying the unclassified records is the first bulk authorization change
--- this system will make. 84 current records move between capability scopes at
--- once. Running that through a direct UPDATE would establish -- by the largest
--- such change we will ever run -- that bulk authorization changes need no
--- audit. Done in this order the same 84 changes become auditable evidence
--- instead of an unattributed rewrite.
---
--- ══════════════════════════════════════════════════════════════════════════
--- WHY workstream IS THE SERIOUS ONE
--- ══════════════════════════════════════════════════════════════════════════
--- `owner` and `visibility` were already flagged as mutable under custody
--- locking. `workstream` is worse, and it is worse for a specific reason:
--- it is the scope input itself. row_scope(workstream) is what
--- can_read_row() resolves capability against, so changing a record's
--- workstream silently moves it between authorization scopes -- with no custody
--- event, no audit row, and no sanctioned transition -- while the CONTENT it
--- exposes is immutable.
---
--- The asymmetry is the whole point. This system spent considerable effort making
--- the claim unrewritable, and left the field that decides who can read the claim
--- editable by anyone with a database connection. An attacker who cannot change
--- what a record says can still change who is allowed to read it, which for most
--- purposes is the more useful capability.
---
--- All three route through ONE function. Three separate paths would drift, and
--- they are the same class of thing: inputs to an authorization decision.
 
--- ══════════════════════════════════════════════════════════════════════════
--- 1. The audit surface
--- ══════════════════════════════════════════════════════════════════════════
 create table if not exists record_authorization_audit (
   id                uuid primary key default gen_random_uuid(),
   record_relation   text        not null check (record_relation in ('memories','wiki_pages')),
