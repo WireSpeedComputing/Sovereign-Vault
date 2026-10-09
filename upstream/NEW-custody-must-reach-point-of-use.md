@@ -1,92 +1,50 @@
-## Summary
+# Custody metadata at the point of use
 
-SMP requires recording authorization/assurance-at-write, actor evidence, and
-supersession links as locked custody fields. It does not appear to require that
-any of it be **delivered to the consumer at the point of use**.
+> Source/fixture note: this document states portable contracts and test methods.
+> It does not report a customer corpus, access configuration, or hosted execution.
 
-Running a real deployment against real agents, that gap turns out to matter more
-than the recording requirement. Custody metadata that never reaches the
-decision is audit-only: it protects the archive, not the answer.
+## Contract gap to test
 
-## The concrete observation
+Recording authorization/assurance-at-write, actor evidence, and supersession
+links is different from delivering them with the content a consumer receives.
+A retrieval payload that omits those distinctions can turn a qualified custody
+claim into an apparently unqualified fact.
 
-Our governed retrieval returns, per result: exact locator, citation,
-provenance basis, workstream, relevance scores, effective time, truncation flag.
+Inspect the exact source projection for each consumer path. Citation, relevance,
+effective time, and an exact locator do not substitute for:
 
-It does **not** return:
+- actor assurance, including an explicit caller-asserted or unknown state;
+- the recorded asserting actor, with request-derived actor identity kept separate;
+- visible supersession state and lineage;
+- known contradictions, or an explicit statement that contradiction evaluation
+  was not performed.
 
-- **assurance** — every actor claim in this deployment is recorded as
-  `caller_asserted_unauthenticated`, because under a shared service credential a
-  caller-supplied principal UUID proves the UUID belongs to an active human, not
-  that the caller is that human. We record that honestly. The consuming model
-  never sees it, so it cannot weight the claim.
-- **asserting agent** — recorded on the row, absent from the payload.
-- **supersession state** — whether this record has a successor, or superseded
-  something. Filtering to current is correct, but a model cannot tell whether it
-  is holding a long-settled fact or one corrected an hour ago.
-- **contradiction** — if two returned records disagree, nothing says so. Our
-  import path raises contradictions into a review queue at ingest; retrieval
-  surfaces none of that.
+A caller-supplied principal UUID establishes neither the caller's identity nor
+the authenticity of an assertion. That limitation follows from the API's
+evidence, without describing any adopter's credential arrangement.
 
-Every one of those is recorded. None is delivered.
+## Proposed synthetic method
 
-## Why this is a protocol concern rather than an implementation bug
+Use fabricated records with different assurance levels, one current/superseded
+pair, a known unresolved contradiction, and a projection whose copied access
+metadata differs from its canonical source. Verify the authorized consumer
+payload preserves each distinction while hiding inaccessible actors/records.
+Compare a resolved identity with a deliberately unresolved one so a negative
+result cannot masquerade as successful verification.
 
-A human consumer compensates by looking around: opening the audit view, checking
-a timestamp, noticing two documents disagree. Those moves are cheap for a person
-and expensive or impossible for a model, which sees exactly one assembled
-payload and cannot cheaply re-query to establish trust.
-
-So an implementation can be **fully conformant on recording** and still hand a
-model an unqualified assertion. The model then treats a caller-asserted,
-recently-contested record identically to a verified, long-settled one — which is
-the exact failure custody metadata exists to prevent.
-
-Stated as a rule: *if the retrieval contract does not carry assurance,
-supersession state, and contradiction signals alongside content, custody
-metadata cannot influence any decision made from that content.*
-
-## Evidence from this deployment
-
-- A verified defect where a resolver silently resolved nothing: every call
-  returned a safe-looking negative, and the system appeared correct at every
-  surface. Only forcing a positive result exposed it. A payload carrying
-  assurance would have shown "unresolved" rather than an unqualified answer.
-- Eight stale pricing records contradicting one confirmed current record. Caught
-  at import by the review queue. Retrieval would have returned any of them as a
-  bare fact with a valid-looking citation.
-- A derived projection carrying its own stale copies of access metadata. Fixed,
-  but it demonstrated that a consumer reading the projection had no way to know
-  the copy diverged from source.
+This is a proposed fixture design. It does not assert that these cases have
+already been run or that a particular corpus contains them.
 
 ## Suggested requirement
 
-Add a retrieval/context-assembly conformance requirement roughly of this shape:
+1. Each returned assertion carries its recorded assurance and actor evidence,
+   with an explicit unknown when the evidence is insufficient.
+2. Supersession metadata resolves against readable canonical records. A hidden
+   successor must not leak an identifier through a lineage field.
+3. Context assembly reports known visible contradictions or an explicit
+   not-evaluated state. Silence cannot mean that contradiction checks passed.
+4. Truncation, missing evidence, and unqueried coverage remain explicit rather
+   than being inferred away by a consuming model.
 
-1. Every returned assertion MUST carry its assurance level and asserting actor,
-   not merely have them recorded.
-2. Every returned assertion MUST indicate supersession state — whether it has a
-   successor, and whether it superseded a predecessor.
-3. A context assembly MUST signal known contradictions among returned
-   assertions, or explicitly declare that contradiction detection was not
-   performed. Silence must not be indistinguishable from "no contradictions."
-4. Where any of the above cannot be determined, the payload MUST say so rather
-   than omit the field. An absent field is read as "not applicable"; an explicit
-   unknown is read as a caution.
-
-Item 4 generalises a pattern this deployment has been repeatedly bitten by: an
-empty or absent result being indistinguishable from a verified-clean one. It is
-the same reasoning behind reporting evaluation status separately from findings.
-
-## Adoption argument
-
-This is the difference between a protocol that is auditable after an incident
-and one that changes what a model does before the incident. An implementer can
-satisfy the recording requirements today and gain no behavioural benefit
-whatsoever, which makes the recording work feel like compliance overhead. Making
-delivery normative is what converts custody from paperwork into something that
-demonstrably improves answers — and that is the argument that makes adoption
-attractive rather than dutiful.
-
-Happy to contribute the payload shape and conformance fixtures from our
-implementation once we have run it against real agents for a while.
+The same discipline applies to runtime answers and retrospective audit: a
+field that was stored but never delivered cannot inform the consumer's decision.

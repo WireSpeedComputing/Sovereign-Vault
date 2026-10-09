@@ -92,17 +92,12 @@ The lesson is the point: **a checker that cries wolf gets ignored.** It does not
 get fixed, it gets skipped, and then it is worse than no checker, because from
 the outside it looks like coverage.
 
-We rediscovered exactly this failure, independently, in a completely unrelated
-tool in the same project. A SQL perimeter assertion returned close to two
-hundred rows against a real deployment — nearly all of them extension-owned
-objects that the schema does not control and could not revoke without breaking
-legitimate callers — while returning zero rows on a local replay. It passed in
-the only environment where it was cheap to run and was unusable in the one
-environment it existed to protect, and the noise is precisely why nobody noticed
-for months.
+A SQL perimeter checker has an analogous signal problem if it mixes expected
+extension internals with repository-owned exposures. Managed-host defaults can
+differ from a plain replay, so a portable checker must identify its host
+assumptions and separate extension ownership from reviewed application grants.
 
-Two tools, different languages, different authors, same bug: **the check was
-tuned for recall and never for actionability.** We would suggest #40's
+Both checker designs need actionability alongside recall. We would suggest #40's
 requirements say so explicitly — a public-safety check that produces
 unactionable output has not met the requirement, however complete its coverage.
 

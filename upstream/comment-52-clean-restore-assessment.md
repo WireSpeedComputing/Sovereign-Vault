@@ -43,7 +43,10 @@ This is the part worth taking from us, because we shipped the weaker thing first
 
 Our earlier `tests/replay_fresh_install.sh` established equivalence by listing object **names** filtered to non-extension objects. A reviewer was right that this proves much less than it appears to. All of the following pass a name check: a function with the right name and a rewritten body; an index with the right name over different columns; a trigger with the right name pointed at a different function; a table with the right name and a dropped constraint; a definer function silently flipped to invoker; a definer function with its `search_path` removed; a permissive RLS policy appearing where the model was deny-all. Every one of those is now in the corruption suite.
 
-The obvious fix — hash `pg_get_functiondef()` — also fails, on a real pair in our tree. One projection-refresh function exists in two forms that are semantically identical and textually different (the applied migration carries a condensed body; the repo file keeps the rationale). Raw md5 differs; the canonical hash is the same. A raw-text check reports drift on that correct pair **forever**, and a checker that cries wolf gets muted, at which point it catches nothing.
+A raw function-definition hash also treats comment/format-only edits as drift.
+Use a source-derived formatting pair and an independent authorization mutation
+as proposed fixture controls. These constructions are a method, not a report
+of a private deployed/repository function pair.
 
 So bodies are canonicalized before hashing — comments stripped, whitespace runs collapsed **outside** string literals and quoted identifiers, by a quote-aware tokenizer. Everything that is *not* the body is compared **exactly**: signature, return type, language, volatility, security mode, strictness, leakproofness, parallel safety, `proconfig` search path, ACL, owner, RLS flags, `reloptions`, enum labels, constraint/index/trigger/policy definitions, column types and defaults, comments-as-documentation.
 
@@ -59,7 +62,10 @@ So bodies are canonicalized before hashing — comments stripped, whitespace run
 
 All seven are asserted, not merely described: `canonicalize_inventory.py --self-test` runs eight cases in both directions — including "comment text changed → must hash SAME" and "keyword case changed → must hash DIFFERENT" — and it runs as check J0 *before* the comparison it validates. The documented limits cannot silently drift away from the implementation.
 
-The end-to-end version of the same claim: the real projection-refresh body, condensed, with exactly **one ACL predicate deleted** (51 characters out of ~3500) must be CAUGHT by J; the same body condensed the way the applied migration condensed it must verify CLEAN. Sensitive to 51 characters of meaning, blind to 920 characters of formatting — both halves are tested, and the condensation is done with `sed`/`tr` rather than with the canonicalizer, so the tool is not grading its own homework.
+For end-to-end discrimination, require a source-derived formatting-only variant
+to remain equivalent and a variant deleting an authorization predicate to be
+reported as drift. The transformation must be independent of the canonicalizer.
+Record exact run artifacts; this prescription does not claim an execution.
 
 ---
 
@@ -81,9 +87,9 @@ The end-to-end version of the same claim: the real projection-refresh body, cond
 
 **Candidate/promoted separation is by status value, not by structure.** Candidates are a lifecycle status, not a structurally separate field, view, or query path. The retrieval projection excludes non-current records and a probe fails if that stops being true — which is the behaviour the issue wants — but the *structural* separation §"Candidate and demo boundary" asks for is not there, and there is no separately named wholesale-droppable demo scope.
 
-**The restore target is a locally `initdb`-ed cluster on a fixed port, not a pinned container image.** Reproducible enough for us; not the pinned target this issue specifies.
+**The restore target is a locally `initdb`-ed cluster on a fixed port, not a pinned container image.** That host setup must be qualified independently; it is not the pinned target this issue specifies.
 
-**This has only ever run on a synthetic fixture.** The live deployment's rows have never been through the pipeline. Everything above proves the *mechanism*. Two consequences we make the transcript say out loud rather than letting a green run imply otherwise: one terminal lifecycle value is unreachable — no sanctioned function produces it — so check D reports which enum values the fixture *never exercised* instead of asserting a count of zero as though absence were coverage; and one of the two governed tables has no promote path, so its lifecycle coverage is genuinely narrower.
+**A synthetic fixture validates mechanism within its declared coverage.** It does not certify any adopter's corpus or target; those require separate private acceptance receipts. Two consequences we make the transcript say out loud rather than letting a green run imply otherwise: one terminal lifecycle value is unreachable — no sanctioned function produces it — so check D reports which enum values the fixture *never exercised* instead of asserting a count of zero as though absence were coverage; and one of the two governed tables has no promote path, so its lifecycle coverage is genuinely narrower.
 
 **A local perimeter result is weaker than a hosted one.** Vanilla PostgreSQL does not apply the managed platform's default grants to its anon/authenticated roles, so those `ALTER DEFAULT PRIVILEGES` statements record nothing locally and a local perimeter count of zero proves less than the same number on a hosted project. The check says so in its own output.
 

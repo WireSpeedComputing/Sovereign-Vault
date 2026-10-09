@@ -1,57 +1,13 @@
 -- 53_compliance_regulatory_baseline.sql
---
 -- MIGRATION: 68_compliance_regulatory_baseline
+-- Optional regulated-product reference module, not universal business policy.
+-- Public-regulation-derived detection patterns provide reproducible reference
+-- rules. Deployment-specific wording, prices, products and decisions stay
+-- private and are not seeded by this module.
 --
--- Owner decision, 2026-08-09. Closes the blocker recorded in sql/49: no file in
--- this repo seeded language_rules, so a fresh install had NO compliance
--- detection at all and reported a clean replay because there was no rule left
--- to fail. A control that exists in exactly one place, same class as the
--- migration bodies.
---
--- ══════════════════════════════════════════════════════════════════════════
--- THE SPLIT, AND WHERE THE SEAM ACTUALLY IS
--- ══════════════════════════════════════════════════════════════════════════
--- The ruleset was measured before splitting: 19 current rules, of which 4 carry
--- an `authority` naming a regulation. That is the seam, and it is a property of
--- the data rather than a judgement call applied to it.
---
--- SEEDED HERE -- generic regulatory scaffolding. Derived from public regulation,
--- needed by any dietary-supplement deployment, and contains no deployment data:
---
---   1. disease claims, tier 1     hard treatment verb + named condition
---   2. implied disease claims     disease verb + characteristic symptom
---   3. disease claims, tier 2     soft verb / preposition + named condition
---   4. the mandated disclaimer    required-phrase rule
---
--- NOT SEEDED -- deployment-specific, stays as data in the deployment:
---   * stale-figure rules naming our prices and SKUs
---   * retired brand phrasings ("clinical doses", "therapeutic dosing")
---   * positioning rules about how our products may be described
--- Those are ours, Rule 0 applies to them, and they would be wrong for anyone
--- else's deployment anyway.
---
--- This is what "example domain module" should mean: the module ships the part
--- that generalises and leaves the part that does not.
---
--- ══════════════════════════════════════════════════════════════════════════
--- WHAT THIS FILE DOES NOT CLAIM
--- ══════════════════════════════════════════════════════════════════════════
--- It is not legal advice and has not been through counsel. The `authority`
--- strings name the statute each rule is modelled on, which is a citation, not
--- an opinion that the pattern is the law. A deployment relying on these must
--- have them reviewed -- and the rationale on each row says what it is trying to
--- catch, so a reviewer can check the intent rather than reverse-engineer a
--- regex.
---
--- IDEMPOTENT. Existing deployments already carry these four rules; this file
--- must be a no-op there rather than a second copy. Keyed on a stable property
--- of each rule, not on id.
---
--- ONE CONDITION VOCABULARY. The named-condition alternation appears in two of
--- the four rules and is defined once below. Two hand-maintained copies of ~130
--- conditions fork, and the failure mode of that fork is a condition that blocks
--- under one verb and passes under another -- which is exactly the gap that
--- migration 66 was written to close.
+-- Review suitability for the selected jurisdiction and workflow. Authority
+-- citations describe the modeled source, not an approval or legal conclusion.
+-- Stable rule properties make repeated installation idempotent.
 
 do $baseline$
 declare
@@ -62,20 +18,8 @@ declare
   v_disclaimer constant text := '(?i)not intended to diagnose,?\s*treat,?\s*cure,?\s*or prevent any disease';
   v_seeded     int := 0;
 begin
-  -- owner/visibility are deliberately NOT set. FOUND WHILE WRITING THIS FILE:
-  -- language_rules, ingredients, products and suppliers all carry owner and
-  -- visibility columns on the live deployment that NO file in this repo
-  -- creates. A fresh install produces those tables without them, so an INSERT
-  -- naming those columns works against production and fails on a clean build.
-  --
-  -- The migration drift checker cannot see this: it compares migration
-  -- INVENTORIES, not schema content, and says so in its own header -- a repo
-  -- file whose body has drifted from the applied object still reads as present.
-  -- Recorded as a finding rather than fixed here, because adding four columns
-  -- to reconcile a schema is a separate change from seeding a ruleset.
-  --
-  -- Omitting them keeps this file portable across both shapes, which is the
-  -- property that matters for a baseline meant to run on any deployment.
+  -- Owner/visibility are left to the optional domain parity module. Seeding
+  -- these reference rules does not assign a customer owner or permission.
 
   v_conditions :=
     'disease|diseases|disorder|disorders|illness|illnesses|syndrome|anxiety|anxieties|'
@@ -151,10 +95,9 @@ begin
     v_seeded := v_seeded + 1;
   end if;
 
-  -- 3. TIER 2 -- soft verb / prepositional construction + named condition. Review.
-  --    Migration 66 seeded this on the live deployment by reading tier 1 back.
-  --    Here it is built from the same vocabulary, so a fresh install gets both
-  --    tiers rather than a tier 2 that silently declines to seed.
+  -- 3. TIER 2 -- soft verb/prepositional construction plus named condition.
+  -- Build from the same reference vocabulary as tier 1.
+
   if not exists (select 1 from language_rules
                  where status='current' and finding_kind='banned_language'
                    and severity='high' and pattern like '%good for%') then

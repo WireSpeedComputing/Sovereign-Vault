@@ -7,40 +7,21 @@ any deployment.**
 - `pending/D_scope_hierarchy.sql` + `pending/D_scope_hierarchy_TEST.sql` — declared
   containment, 14-case matrix, pending approval
 
-## Read this first: the capability model is wired to NOTHING
+## Verify consuming paths, not only helper definitions
 
-We grepped all of `sql/`. **Nothing calls `has_capability()` or
-`request_has_capability()`** — not one RLS policy, not one function, not one
-view. Outside the definition sites, the only occurrences are a comment and an
-exception-reason string.
+A scope registry and capability helper are not enforcement until a read or write
+path consumes their result. Inspect policies, invoker/definer RPCs, views, boot
+surfaces, and derived projections; then test them through trusted request
+identity. Current row-access source is in `sql/36_rls_policies.sql` and the
+authenticated lifecycle wiring is in `sql/37_rls_authenticated_select_and_lifecycle.sql`.
+The historical design tests in `tests/30_scope_bound_authority.sql` must not be
+read as current deployment receipts.
+This is the same chokepoint question raised for promotion entry paths in #46.
 
-So the authority model is currently **decorative**. Every property below — scope
-validation, registry integrity, isolation — is real and testable *at the
-capability layer*, and none of it constrains a single read or write of knowledge
-today, because no read or write path consults it.
-
-We are reporting this rather than quietly building on top, because a scope model
-that nothing enforces will read as "scope-bound authority: done" in six months.
-Concretely, `scope_authority_report()` returns `enforced = false` for every
-scope, **hardcoded**, and the function comment says the hardcoding is not a
-placeholder — reporting anything else would be a lie. It becomes a computed
-column when the first policy consults capabilities.
-
-This is the same shape as the #46 finding, one layer over: `promote_memory()`
-looked like a chokepoint and was a convenience wrapper; `has_capability()` looks
-like an authorization boundary and is an unreferenced function. We would suggest
-that "is anything actually calling this?" belongs in the acceptance criteria for
-any authority model, because it is not visible from the schema.
-
-`tests/30` Section C is the honest half of the suite. #45 asks for tests proving
-current and stale truth cannot leak across scopes. **Those tests cannot be
-written yet**, and Section C asserts *why* rather than skipping it —
-`c1_scope_authority_report_admits_nothing_is_enforced` and
-`c2_a_granted_scope_still_constrains_no_reads`. Section C **fails the moment
-enforcement lands**, which is the signal to come back and write the real
-cross-scope leakage tests. Writing leakage tests against a model nothing
-consults would produce a green suite proving only that two function calls return
-different booleans.
+Proposed fixture: two registered scopes, separate human/client mappings, a
+positive authorized row, a private row, a non-current row, and a cross-scope
+decoy. Require the positive control before denials and compare identifiers
+across paths. Nothing in this method asserts a particular adopter's grants.
 
 ## Conformance against the acceptance criteria
 
@@ -79,12 +60,10 @@ fail-closed is still a defect**: the operator believes authority was granted and
 has no signal otherwise. A registry with a foreign key turns a typo from a silent
 no-op into an error at grant time — the only moment anyone is paying attention.
 
-This is not hypothetical for us. We lost an afternoon to exactly this failure one
-layer over, in the identity binding: `issuer` was written as a sensible-looking
-label rather than the literal `iss` claim URL, and every binding silently failed
-to resolve while looking perfectly healthy. Same class of bug — an unvalidated
-string whose only symptom is having no effect. `b1_typo_scope_rejected_at_grant_time`
-and `b2_malformed_scope_rejected`.
+The same validation principle applies to identity bindings: the issuer must
+match the trusted request's actual issuer rather than a descriptive label.
+A proposed synthetic typo control must fail explicitly rather than leaving an
+operator with a successful insert that authorizes nothing.
 
 **Adoption warning:** the FK from `capability_grants.resource_scope` to
 `scope_registry` is a **compatibility break**, not just a constraint. Any caller
@@ -92,9 +71,9 @@ granting an ad-hoc scope string now fails. It broke one of our own tests on firs
 run, which had granted an unregistered ad-hoc string. That breakage *is* the
 feature working — but anything outside the repo that writes grants (an
 onboarding script, a seeding job) breaks the same way, and should be found before
-this is applied rather than after. It is safe to add the FK inline only because
-this deployment has zero capability grants; on a deployment with grants, the
-backfill of existing scopes *is* the migration.
+this is applied rather than after. Before adding the FK, inventory existing grants and register their reviewed
+scopes. If grants already exist, that reconciliation is part of the migration;
+do not assume an empty grant set.
 
 ## Wildcard semantics: pattern wildcards REJECTED, declared containment chosen
 
@@ -184,11 +163,9 @@ unique index on the real invariant: at most one *live* declaration per scope.
   unreachable to everyone, so they need either a default scope or an explicit
   exemption. Naming it here because it is the kind of thing that gets discovered
   during a rollout instead of decided before one.
-- **The agent half of the model is untestable today.** Authority for an
-  agent-mediated request is the *intersection* of the human's grants and the
-  agent's, but password-auth tokens carry no `client_id`, so the agent half
-  cannot be exercised at all without an OAuth/MCP client flow. Related: tokens
-  carry `session_id`, not `jti`, so any per-token revocation design must key on
-  `session_id`.
+- **Verify the actual request and session contract.** Agent-mediated authority
+  requires the intersection of mapped human and client grants. Do not infer
+  client binding or revocation semantics from a token flow used for another
+  application. Test missing, mismatched, revoked, and expired sessions explicitly.
 - **Retiring a scope does not revoke grants on it.** Documented on the table
   comment rather than silently true.

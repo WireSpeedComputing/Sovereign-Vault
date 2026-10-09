@@ -1,8 +1,11 @@
-Implemented and **applied** as a deployment migration on 2026-08-07:
-`sql/24_wiki_supersession.sql`. It was staged in `pending/` until owner approval
-and moved into `sql/` only once applied — `pending/` exists precisely so an
-unapproved migration is not swept into a replay that would then prove something
-untrue about the deployment.
+# Wiki supersession source contract for upstream #71
+
+> Source/fixture note: this document states portable contracts and test methods.
+> It does not report a customer corpus, access configuration, or hosted execution.
+
+`sql/24_wiki_supersession.sql` contains the constraint and sanctioned API
+changes described below. File location does not certify target application;
+verify the actual migration receipt and catalog before adoption.
 
 ## The finding that matters: supersession was blocked by TWO independent mechanisms
 
@@ -29,22 +32,13 @@ for, that is not evidence it was the only one. We found the second only by
 attempting the operation after the constraint change rather than declaring
 victory on the DDL.
 
-## Preflight, verified live before the dry run
+## Required target preflight
 
-Against the four audit items in the issue:
-
-| check | result |
-| --- | --- |
-| `wiki_pages_path_key UNIQUE (path)` present | Confirmed, exactly as #71 found |
-| duplicate active paths | **0** — nothing to reconcile, migration safe to proceed |
-| inbound foreign keys depending on `path` | None. The only inbound FK references `id`, not `path` |
-| `INSERT ... ON CONFLICT (path)` callers | One, and it is a **false positive**: it targets a different table (`doc_integrity`) which has its own primary key on `path`. Conflict-target inference is unaffected there |
-
-That last row is the one worth calling out. #71 flags the `ON CONFLICT (path)`
-audit because a partial unique index changes conflict-target inference — correct,
-and a grep for the string finds a hit that looks alarming and is not. The audit
-has to resolve which *table* each conflict target belongs to, or it produces a
-scary answer and stalls the migration.
+Before changing path uniqueness, inspect the exact constraint/index, duplicate
+current paths, inbound dependencies, and every `ON CONFLICT (path)` caller.
+Resolve the conflict target's table: a match targeting `doc_integrity` is not
+a caller of `wiki_pages`. Record results privately; do not assume a duplicate
+count or dependency inventory from a different installation.
 
 ## What shipped
 
@@ -77,7 +71,7 @@ against copying it verbatim without security review, and we did not. It carries:
   `anon`, `authenticated` and `public`
 - `actor_assurance` recorded on the predecessor's frontmatter, because a
   caller-supplied principal UUID proves the UUID belongs to an active human, **not
-  that the caller is that human** under a shared credential. We would rather that
+  that the caller is that human**. We would rather that
   caveat live in the data than in a doc.
 
 The successor is created inside the same transaction as the predecessor's

@@ -1,37 +1,9 @@
 -- 38_agent_surface_alias.sql
---
 -- MIGRATION: 50_agent_surface_alias_resolution
---
--- Agent attribution resolved to nothing. Fixed by mapping, never by rewriting.
---
--- THE DEFECT. memories.source_agent records surface identifiers of the form
--- '<actor>-<surface>', while principals.agent_label holds short actor names.
--- They never join. Every attributed row resolved to no registered principal, so
--- attribution was free text that looked correct and meant nothing.
---
--- Same class as an identity binding written with a human-readable label instead
--- of the literal issuer URL: an unvalidated string that silently resolves to
--- nothing while every surface signal looks healthy. That one was caught only by
--- forcing a positive result; this one only by joining the two tables and
--- getting zero.
---
--- WHY MAPPING AND NOT RENAMING. Rewriting source_agent would rewrite a recorded
--- custody claim. Those values are what was actually recorded — the record is
--- correct and the registry was incomplete. Under chain-of-custody doctrine the
--- original claim is not editable, and the field locks in the next migration
--- make it structurally impossible. The registry adapts to the evidence, not the
--- reverse. Ordering matters: this had to land BEFORE the locks, because
--- afterwards source_agent cannot be rewritten even to correct it.
---
--- WHY A TABLE AND NOT MORE PRINCIPALS. One actor operates across multiple
--- surfaces or project contexts — two of the observed identifiers are the same
--- reviewer instance in different contexts. Minting a principal per surface
--- would fragment identity and make revocation per-surface rather than
--- per-actor. Many-to-one is the real shape.
---
--- NULL source_agent rows are bulk imports predating the convention. Not
--- backfilled: inventing attribution for records that never carried it would be
--- worse than an honest null.
+-- Resolve recorded surface identifiers to reviewed principals through an
+-- explicit many-to-one registry. Preserve original source_agent custody values;
+-- missing attribution must not be fabricated through a backfill.
+-- Alias rows, actual actors and review context remain private deployment data.
 
 create table agent_surface_alias (
   id                 uuid primary key default gen_random_uuid(),

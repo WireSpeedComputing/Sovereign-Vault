@@ -1,70 +1,14 @@
--- APPLIED as deployment migration 43 (2026-08-07)
---
+-- 36_rls_policies.sql
 -- MIGRATION: 43_rls_policies_scope_narrows_visibility
+-- Scope narrows visibility: a readable row must satisfy both the existing
+-- owner/visibility predicate and the verified request's workstream capability.
+-- NULL/blank workstream maps to the explicit workstream:unclassified scope;
+-- this is a grantable scope, never an exemption.
 --
--- APPLIED 2026-08-07 as migration 43. Capability grants were issued in the same
--- session -- see STATUS.md. Grants are deployment data and are not in this repo.
---
--- WO-08 Task 2 / our issue #11: RLS policy wiring. LIVE.
---
--- ############################################################
--- APPLY ORDER. This file assumes, in order:
---   sql/30_scope_bound_authority.sql   (scope_registry, the scope grammar)
---   pending/B_retrieval_topology_ISSUE72.sql  (Part 2's retrieve_context)
--- It REDEFINES retrieve_context() on top of B's version. Applying this without
--- B silently reverts B's topology envelope. Applying B after this silently
--- reverts the scope gate below. They must go in order, or be merged first.
--- Stated here because "apply the pending files" is the kind of instruction that
--- gets executed alphabetically.
--- ############################################################
---
--- ══════════════════════════════════════════════════════════════════════════
--- WHAT WAS ACTUALLY WRONG
--- ══════════════════════════════════════════════════════════════════════════
--- Verified live: ZERO RLS policies exist across every RLS-enabled table, and
--- nothing calls has_capability() or request_has_capability(). Access works only
--- because service_role carries BYPASSRLS.
---
--- The consequence is not "slightly permissive". RLS enabled with no policy is
--- DENY-ALL. So a founder who authenticates today resolves to the right
--- principal, evaluates capability correctly, and then sees NOTHING — the
--- identity layer works and there is no path from it to a row. That is the last
--- structural blocker to multi-user, and it fails in the safe direction, which
--- is why nobody noticed.
---
--- ══════════════════════════════════════════════════════════════════════════
--- THE MODEL: SCOPE NARROWS VISIBILITY
--- ══════════════════════════════════════════════════════════════════════════
--- A row is readable iff it passes BOTH:
---   1. the existing owner/visibility predicate (is_owner_or_shared), and
---   2. the principal holds read on the row's workstream scope.
---
--- Strictly more restrictive than today. Union-with-visibility was rejected
--- outright: an authority rule that GRANTS access is not an authority model, and
--- adding one could only ever widen.
---
--- NULL workstream is 69% of current rows (84 of 122). Those are not exempt and
--- are not backfilled. They map to one reserved, grantable scope,
--- 'workstream:unclassified':
---   * backfilling forces invented classifications onto genuinely cross-cutting
---     content, and a wrong classification is worse than an honest null;
---   * exempting leaves the model governing 31% of the corpus, which is
---     decorative in a new way.
--- Granting that scope is a deliberate, auditable act, exactly like any other.
---
--- ══════════════════════════════════════════════════════════════════════════
--- ONE AUTHORIZATION PATH, TWO IDENTITY SOURCES
--- ══════════════════════════════════════════════════════════════════════════
--- The dangerous version of this change is two predicates that agree today and
--- drift apart later. There is one composition rule, written once, reached two
--- ways:
---   can_read_row(owner, visibility, workstream, principal)  -- explicit actor,
---       for SECURITY DEFINER functions that already carry a principal
---   can_read_row_as_request(owner, visibility, workstream)  -- request identity,
---       for RLS policies, resolving the principal from verified JWT claims
--- The second delegates the scope decision to the same place the first does.
+-- Dependency order: sql/30 scope authority and sql/35 retrieval topology
+-- precede this file. The cumulative implementation replaces retrieve_context.
+-- Resolve explicit and request-derived actors through the same scope predicate.
 
--- ── The reserved-scope rule, in exactly one place ─────────────────────────
 create or replace function public.row_scope(p_workstream text)
 returns text language sql immutable set search_path = public as $$
   select 'workstream:' || coalesce(nullif(btrim(p_workstream), ''), 'unclassified');

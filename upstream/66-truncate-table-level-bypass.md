@@ -1,4 +1,7 @@
-Second report from the same deployment as the field-lock comment above. The locks are applied and they hold. Probing what they do *not* cover produced something that belongs in this issue's conformance scope rather than in an implementation's tracker.
+# Statement-level custody controls for upstream #66
+
+> Source/fixture note: this document states portable contracts and test methods.
+> It does not report a customer corpus, access configuration, or hosted execution.
 
 ## Every enforcement mechanism here is row-level. What it protects against is not.
 
@@ -22,11 +25,17 @@ Two details that make it worse rather than better:
 - **The receipt tables are truncatable by the same privilege.** (This one also bears on #47, which asks whether promoted records are append-only, content-hash audited, or both — whichever is chosen, the audit store inherits this problem.) The delete-audit table exists precisely so that destruction is observable. It is protected by `BEFORE UPDATE OR DELETE … FOR EACH ROW`, exactly like the records it describes, so the same statement class that destroys the records also destroys the evidence that they were destroyed. "Append-only" in this design means *no row can be edited or deleted individually*. It does not mean the evidence cannot be destroyed, and it reads as though it does.
 - **Referential integrity does not save you.** `TRUNCATE` against a table referenced by a foreign key fails and asks for `CASCADE`. `CASCADE` widens the blast radius; it does not prevent it. This is the same shape as the finding in the field-lock comment above — a protection that only holds for the malformed version of the attempt is not a protection, and it audits as one.
 
-**Is the privilege actually held?** Queried rather than assumed, read-only, against the live deployment. Enumerating `TRUNCATE` from `information_schema.role_table_grants` over the governed tables and the receipt table returns, for each of them, the database owner and **the shared service role** — the credential every agent in this system runs under. It is not a stale grant and nobody granted it deliberately; it arrives with table creation on a hosted platform and is never the privilege anyone thinks to enumerate.
+## Privilege inventory and synthetic control
 
-So the exposure is not theoretical for us and is unlikely to be theoretical for anyone else running the same shape: the single credential that all automation holds can destroy the governed corpus and its own delete-receipt table with two statements, defeating four triggers that were each individually verified to work.
+Enumerate actual `TRUNCATE`, ownership, DDL, and trigger-control authority on
+every governed and receipt table for the intended runtime roles. Managed-host
+default grants and role inheritance can differ from a local replay; do not infer
+the target's grants from a file or another host.
 
-The same class arrived once before, more visibly: prior to a default-privileges sweep (`sql/07_default_privileges.sql`), several objects created by earlier migrations carried the platform's default grant of the *full* privilege set — `SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER` — to the network-facing roles. Those were found and revoked. They were found because a perimeter checker enumerates grants (`sql/28_perimeter_assert_signal.sql`) — and they were found as *read* exposure. `TRUNCATE` was in the list every time and was not what anyone was looking at.
+A proposed synthetic control uses disposable governed and audit tables under the
+intended non-owner runtime role. First prove an authorized ordinary operation
+works; then assert table-level destruction is denied by the declared mechanism.
+This is a method to execute, not an account of an adopter's access plane.
 
 ## The generalisable claim
 
@@ -36,7 +45,7 @@ This is not a gap in a criterion's coverage; it is a gap in the *shape* of the c
 
 > In-place updates to every locked field fail through routine and service paths.
 
-An implementation can satisfy that completely — ours does — while a single `TRUNCATE` removes the records the locked fields belong to. The criterion tests the operation an attacker would not choose.
+An implementation can satisfy that row-update criterion while a permitted `TRUNCATE` removes the records the locked fields belong to. The criterion tests the operation an attacker would not choose.
 
 The layered claims model in this issue is the right frame for the fix, and it already anticipates half of it: layer 1 is "database grants/constraints/append-only APIs for routine enforcement". Grants are named there and are doing no work in practice, because the enforcement everyone builds is triggers, and triggers are row-level. Layers 2–4 are what actually detect a table-level destruction, and they are the layers implementations defer.
 

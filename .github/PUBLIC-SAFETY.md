@@ -30,6 +30,13 @@ than "this is safe to publish" and must be reported as the weaker one.
 
 ## Before you post anything
 
+The public platform must remain reusable across business types. Do not name a
+primary customer or expose an adopter's purpose, private repository, source
+inventory, workflow configuration or operating state. Author attribution is
+separate from customer identity. Use clearly synthetic examples, and keep actual
+deployment handoffs private. The same rule covers tracker titles and bodies,
+review comments, labels, release notes and uploaded artifacts.
+
 Ask the two questions that no pattern can ask:
 
 1. **Does this reduce the work required to attack a real deployment?** Not "does

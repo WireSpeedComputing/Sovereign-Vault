@@ -1,13 +1,11 @@
-We built the retrieval-side half of #72. **Status: PENDING OWNER APPROVAL, NOT
-APPLIED.**
+# Retrieval coverage contract for upstream #72
 
-- `pending/B_retrieval_topology_ISSUE72.sql` — Part 1 (topology table + seed),
-  Part 2 (the envelope change)
-- `pending/B_retrieval_topology_TEST.sql` — 24 assertions, all passing on a fresh
-  PG17 replay with Part 1 applied
+> Source/fixture note: this document states portable contracts and test methods.
+> It does not report a customer corpus, access configuration, or hosted execution.
 
-Part 1 was dry-run tested against the live database inside a rolled-back
-transaction, zero residue. Neither part is applied.
+The topology/envelope mechanism is in `sql/35_retrieval_topology.sql`.
+The historical design vocabulary below must be checked against the current
+source and client contract. Test methods do not establish hosted application.
 
 ## The design decision we think is the upstreamable one
 
@@ -64,7 +62,7 @@ outcome-dependent silently converts it into a different, useless flag.
 
 | #72 requirement | Status |
 | --- | --- |
-| 1. Deployment-neutral store identity/profile + topology + coverage at first call | **Partial** — exposed in the retrieval envelope; there is **no `session_boot()` in this repo** (see below) |
+| 1. Deployment-neutral store identity/profile + topology + coverage at first call | **Integration review required** — retrieval envelope and optional `session_boot()` sources must be compared (see below) |
 | 2. Distinguish `queried` / `not_queried` / `unreachable` / `unknown`; never imply a peer was searched | Yes — full four-value vocabulary, `b5_coverage_vocabulary_is_not_collapsed`, `b6_unreachable_peer_reported` |
 | 3. Report exact stores queried; a single-store miss is not "nothing found everywhere" | Yes — the status value above, plus `unqueried_stores` |
 | 4. Open/stale coordination tasks visible at boot with age/blocking metadata | **Not addressed** |
@@ -114,9 +112,8 @@ exhaustively on `retrieval_status`, or validating the envelope against a closed
 schema, **breaks**.
 
 Under our #70 versioning rule that is a MAJOR bump requiring a pre-DDL
-instruction probe. It is the **fourth #70-class signature change identified in
-this project and the first one caught before it shipped rather than after** —
-which is the strongest argument we have that #70's machinery earns its cost.
+instruction probe. This is the class of change #70's contract-version and instruction review
+mechanism is intended to catch before a caller adopts the new envelope.
 Details in our comment on #70.
 
 We note #72 states it outranks #70 in ordering. We agree on priority and would
@@ -127,16 +124,14 @@ deferred indefinitely, because landing this correctly requires exactly the probe
 ## What we did not do
 
 - **Not applied.** Pending owner approval.
-- **With the current seed, the status is always `evaluated_partial_coverage`,**
-  because three of the four advertised stores genuinely cannot be queried from
-  here. That is the honest answer today, not a bug — but it means the plain
-  `evaluated` branch is exercised **only by tests**
-  (`a4_full_coverage_reports_plain_evaluated`), never by production traffic, and
-  we would rather say so than let a green suite imply otherwise.
-- **There is no `session_boot()` in this repo.** #72 items 1 and 4 assume a
-  first-call introspection surface; #70 assumes the same one. Neither exists.
-  Whoever lands it first should own the shape, or the two issues will produce two
-  incompatible boot surfaces.
+- **Seed rows are configuration, not evidence of connectivity.** Qualify each
+  advertised store and the actual stores queried by a call. Proposed fabricated
+  topology controls must exercise both full and partial coverage; neither a seed
+  label nor a fixture result establishes production reachability.
+- **Boot integration requires source comparison.** `session_boot()` is in
+  `sql/32_session_boot.sql`, with scope composition in `sql/45`. #72 items 1 and 4
+  and #70's contract proposal must align with those optional sources rather than
+  introducing incompatible first-call surfaces.
 - **No client-side work.** Item 6 (static fallback identified as fallback, never
   authority) and item 3's client half are outside this migration entirely. The
   database can now *report* partial coverage; nothing forces a client to render

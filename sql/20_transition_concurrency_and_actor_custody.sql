@@ -1,28 +1,11 @@
 -- 20_transition_concurrency_and_actor_custody.sql
---
--- Two defects found by an independent architecture review, both confirmed
--- against a live deployment before fixing.
---
--- DEFECT 1 -- lifecycle races. All three transition functions read a row's
--- status, then UPDATE it later, with no row lock and without retaining the
--- expected state in the UPDATE predicate. Two concurrent sessions can both
--- read 'proposed'; one promotes; the other then rejects, overwriting the
--- result. Not theoretical: a stuck idle-in-COMMIT session holding locks on
--- this table was observed on a live deployment the same day.
---
--- DEFECT 2 -- supersession had no actor custody at all. supersede_memory()
--- accepted no acting principal, did no active-human validation, and recorded
--- no actor, so every supersession was attributable to nobody. The actor is now
--- required and the old unaudited 5-argument form is DROPPED, not left callable.
---
--- On what the actor proves: a caller-supplied principal UUID demonstrates only
--- that the UUID belongs to an active human. It does not prove the caller IS
--- that human while clients share an unrestricted credential. That limit is now
--- written into the audit trail itself as actor_assurance =
--- 'caller_asserted_unauthenticated', so a later reader cannot mistake these
--- records for authenticated attribution. Deriving the actor from verified
--- per-request identity, and removing the public UUID parameter, is the real
--- fix and needs connection identity this schema does not yet have.
+-- Serialize sanctioned status transitions and preserve correction attribution.
+-- A predecessor lock and expected-state predicate prevent concurrent successors
+-- from silently forking a current record. Transaction-local sanction flags must
+-- cover exactly the authorized work and reset on success and exception.
+-- Actor-bearing transition forms replace the earlier actor-free signatures.
+-- A caller-supplied active-human UUID is a claimed actor, not proof that the
+-- requester is that human; downstream request boundaries must verify identity.
 
 create or replace function promote_memory(p_id uuid, p_promoted_by uuid)
 returns text language plpgsql security definer set search_path = public as $$

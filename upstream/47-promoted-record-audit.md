@@ -107,7 +107,7 @@ retrieval envelope needs (see #72): a system must be able to distinguish
 - **`actor_assurance` is `caller_asserted_unauthenticated` on every receipt**,
   and it says so in the column default rather than in a comment somewhere. A
   caller-supplied principal UUID proves the UUID belongs to an active human, not
-  that the caller *is* that human, while clients share one credential. The
+  that the caller *is* that human. The
   receipts are attributable to a claimed actor, not an authenticated one, and we
   would rather the column say that forever than have a later reader assume
   otherwise.
