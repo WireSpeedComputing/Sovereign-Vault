@@ -75,6 +75,21 @@ Deployment owners must compare object definitions, plan rollback and qualify
 their own installation. [STATUS.md](STATUS.md) distinguishes source validation
 from live deployment evidence.
 
+## Orientation for people and AI assistants
+
+| Question | Answer |
+| --- | --- |
+| Purpose | A business-owned knowledge and operations platform on Postgres ([what the foundation provides](#what-the-foundation-provides)) |
+| Place in the program | An independent business platform in the [Sovereign AI OS program map](https://github.com/WireSpeedComputing/sovereign-ai-os). It records Core as design lineage only ([LINEAGE.md](LINEAGE.md)) and does not require the other components |
+| Supported profile | Source for review plus a synthetic fresh-install replay on disposable Postgres. No deployment or customer profile is supported from this repository ([STATUS.md](STATUS.md)) |
+| Prerequisites | Bash and PostgreSQL 15 or later, with `initdb`, `pg_ctl`, `psql` and pgvector available to that installation. No cloud project and no credentials |
+| Exact command | `bash tests/replay_fresh_install.sh` from a clean checkout. It runs an isolated cluster on port 5433 (override with `REPLAY_PORT`) |
+| Expected result | Allowed: the last line is `REPLAY CLEAN -- <n> suite(s) scored, 0 unresolved, 0 skipped.` Denied: each suite's own negative controls must fail closed inside the replay; any unexpected result prints `REPLAY FAILED`, `REPLAY APPLIED BUT VERIFICATION FAILED` or `REPLAY INCOMPLETE` and exits non-zero. On `main` at `947f9ca`, the replay is clean in a UTC session. One obligation-deadline assertion fails when the host zone is America/New_York; a separate draft change fixes it |
+| Cleanup | The exit trap stops the isolated cluster and removes its data and socket directories |
+| Evidence and limits | [STATUS.md](STATUS.md) separates source validation from live deployment evidence. Fresh replay does not establish an upgrade path ([isolated installation](#start-with-an-isolated-installation)) |
+| Source status | Merged source: `main`. Tested review branches: open draft pull requests such as [#37](https://github.com/WireSpeedComputing/Sovereign-Vault/pull/37), each for its stated head only. Operating observations: none are published from this repository. Future direction: candidates in `pending/` |
+| Security | This repository's own private form, with an email fallback ([SECURITY.md](SECURITY.md)) |
+
 ## License and architectural lineage
 
 Licensed under Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE) and
