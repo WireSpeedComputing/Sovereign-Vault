@@ -679,7 +679,10 @@ DO $c$ DECLARE ok boolean := false; detail text := 'not evaluated'; v uuid; BEGI
             'human_direct','a1a1a1a1-0000-0000-0000-00000000a1a1','shared','alpha')
     RETURNING id INTO v;
     SELECT count(*) = 1
-           AND bool_and(o.due_at = obligation_due_at(o.generated_at, interval '30 days', 'America/New_York')),
+           -- Independent oracle (not obligation_due_at itself): 30 New York civil days.
+           AND bool_and(o.due_at = ((o.generated_at AT TIME ZONE 'America/New_York') + interval '30 days')
+                                   AT TIME ZONE 'America/New_York')
+           AND bool_and(o.due_at = obligation_due_at(o.generated_at, r.deadline_interval, r.deadline_time_zone)),
            count(*)||' obligation(s); due_at follows the rule zone, not the Kolkata session'
       INTO ok, detail
       FROM obligations o JOIN obligation_rules r ON r.id = o.rule_id
