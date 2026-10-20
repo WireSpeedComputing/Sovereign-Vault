@@ -75,6 +75,13 @@ Deployment owners must compare object definitions, plan rollback and qualify
 their own installation. [STATUS.md](STATUS.md) distinguishes source validation
 from live deployment evidence.
 
+## Optional maintenance candidate
+
+The [stale embedding repair candidate](docs/retrieval-embedding-backlog-repair.md)
+makes stale cache rows visible to the existing bounded worker backlog. It is
+isolated under `pending/`, preserves existing access controls, and includes an
+executable synthetic regression. It does not run inference or apply itself.
+
 ## License and architectural lineage
 
 Licensed under Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE) and
