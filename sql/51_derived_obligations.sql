@@ -103,6 +103,19 @@ create table obligation_rules (
   -- THE DUTY
   duty_title          text not null check (btrim(duty_title) <> ''),
   deadline_interval   interval not null check (deadline_interval > interval '0'),
+  -- DEADLINE ARITHMETIC IS EXPLICIT, NOT THE CALLER'S SESSION TIME ZONE.
+  -- Calendar units of deadline_interval (years, months, days) are counted on
+  -- the civil calendar of deadline_time_zone; sub-day units (hours, minutes,
+  -- seconds) are elapsed time. See obligation_due_at() for the exact rule.
+  -- 'UTC' (the default) has no daylight-saving shifts, so '30 days' there is
+  -- exactly 720 elapsed hours. A reading whose source counts local calendar
+  -- days must name the zone, e.g. 'America/New_York'; across a fall-back
+  -- transition '30 days' is then 30 calendar days (721 elapsed hours) and the
+  -- wall-clock time of day is preserved. A reading that means an elapsed
+  -- duration should be written in hours, e.g. interval '720 hours'.
+  deadline_time_zone  text not null default 'UTC'
+    check (btrim(deadline_time_zone) <> ''
+           and (timestamptz '2000-01-01 00:00:00+00' at time zone deadline_time_zone) is not null),
   evidence_requirement text not null check (btrim(evidence_requirement) <> ''),
 
   -- THE BASIS. A rule with no citation is an opinion with a due date.
@@ -466,6 +479,37 @@ comment on function close_obligation(uuid, uuid, obligation_status, text) is
 -- strictly better than silently not recording a duty that turns out to be real,
 -- and "records rather than decides" points the same way. obligation_board
 -- reports basis_confirmed=false for every obligation whose rule is unconfirmed.
+-- ── Deadline arithmetic ───────────────────────────────────────────────────
+-- Before this function existed, the generator computed now() + interval in the
+-- CALLER'S session TimeZone. The same rule therefore produced different hard
+-- deadlines for different clients whenever the window crossed a daylight-saving
+-- transition, and tests/51 a4 passed in UTC and failed in America/New_York.
+-- The deadline is a property of the rule, so the rule now carries the zone and
+-- the arithmetic is a pure, session-independent function of
+-- (generation instant, interval, zone):
+--   1. take the civil date and time of p_from in p_zone;
+--   2. add the interval's month and day components on that calendar;
+--   3. interpret the result in p_zone (a non-existent or repeated local time is
+--      resolved by PostgreSQL's fixed rule for that zone);
+--   4. add the interval's time component as elapsed time.
+-- This is PostgreSQL's own timestamptz + interval semantics with the time zone
+-- pinned to the rule instead of inherited from the session.
+create or replace function obligation_due_at(
+  p_from timestamptz, p_interval interval, p_zone text
+) returns timestamptz language sql immutable strict parallel safe as $$
+  select ((p_from at time zone p_zone)
+          + make_interval(months => (extract(year from p_interval) * 12
+                                     + extract(month from p_interval))::int,
+                          days   => extract(day from p_interval)::int)
+         ) at time zone p_zone
+         + (p_interval - make_interval(months => (extract(year from p_interval) * 12
+                                                  + extract(month from p_interval))::int,
+                                       days   => extract(day from p_interval)::int));
+$$;
+
+comment on function obligation_due_at(timestamptz, interval, text) is
+  'Hard-deadline arithmetic for obligations. Calendar units (years, months, days) of the interval are counted on the civil calendar of the rule''s deadline_time_zone; sub-day units are elapsed time. Independent of the session TimeZone. In UTC, day units equal 24 elapsed hours.';
+
 create or replace function generate_obligations_for_task(
   p_task_id uuid, p_event obligation_trigger
 ) returns int language plpgsql security definer set search_path = public as $$
@@ -474,8 +518,11 @@ begin
   select * into v_task from tasks where id = p_task_id;
   if not found then return 0; end if;
 
-  insert into obligations (rule_id, source_task_id, title, due_at)
-  select r.id, v_task.id, r.duty_title, now() + r.deadline_interval
+  -- generated_at is written explicitly from the same instant the deadline is
+  -- computed from, so due_at = obligation_due_at(generated_at, ...) exactly.
+  insert into obligations (rule_id, source_task_id, title, generated_at, due_at)
+  select r.id, v_task.id, r.duty_title, now(),
+         obligation_due_at(now(), r.deadline_interval, r.deadline_time_zone)
     from obligation_rules r
    where r.retired_at is null
      and r.generate_on = p_event
@@ -524,6 +571,7 @@ returns table (obligation_id uuid, title text, status obligation_status,
 language sql stable security definer set search_path = public as $$
   select o.id, o.title, o.status, o.due_at,
          (o.status = 'open' and o.due_at < now()),
+         -- Elapsed days (86400-second units), not calendar days.
          round(extract(epoch from (o.due_at - now())) / 86400.0, 2),
          t.id, t.status,
          r.rule_key, r.authority, r.citation,
@@ -638,6 +686,7 @@ revoke execute on function close_obligation(uuid, uuid, obligation_status, text)
 revoke execute on function generate_obligations_for_task(uuid, obligation_trigger)
   from anon, authenticated, public;
 revoke execute on function obligation_board(uuid) from anon, authenticated, public;
+revoke execute on function obligation_due_at(timestamptz, interval, text) from anon, authenticated, public;
 revoke execute on function obligation_write_paths_from_tasks() from anon, authenticated, public;
 revoke execute on function seed_obligation_rules(uuid) from anon, authenticated, public;
 revoke execute on function trg_generate_obligations() from anon, authenticated, public;

@@ -35,7 +35,7 @@
 --   one 'action' task completed   -> 1 obligation, due 30 days out
 --   a 'review' task matches neither seeded rule -> 0 obligations
 --   basis_confirmed is false for every obligation until the rule is confirmed
---   40 assertions run
+--   50 assertions run (40 original, a4b, and section G's nine DST/zone controls)
 
 BEGIN;
 
@@ -124,6 +124,20 @@ DO $c$ BEGIN
     'due_at - generated_at equals the rule''s declared interval');
 EXCEPTION WHEN others THEN
   INSERT INTO t VALUES ('A','a4_deadline_is_the_rule_interval_from_generation',false,SQLERRM); END $c$;
+
+-- a4 above holds because the seeded rule declares deadline_time_zone 'UTC',
+-- where '30 days' is exactly 720 elapsed hours, whatever the session TimeZone.
+-- a4b states the general rule for every zone: the stored deadline is exactly
+-- the rule's declared arithmetic applied to the stored generation instant.
+DO $c$ BEGIN
+  INSERT INTO t VALUES ('A','a4b_deadline_matches_declared_zone_arithmetic',
+    (SELECT o.due_at = obligation_due_at(o.generated_at, r.deadline_interval, r.deadline_time_zone)
+            AND r.deadline_time_zone = 'UTC'
+       FROM obligations o JOIN obligation_rules r ON r.id=o.rule_id
+      WHERE o.id=(SELECT _ids.v FROM _ids WHERE k='o_action')),
+    'due_at = obligation_due_at(generated_at, interval, deadline_time_zone); seed zone UTC');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('A','a4b_deadline_matches_declared_zone_arithmetic',false,SQLERRM); END $c$;
 
 -- Re-running the generator must not manufacture a second duty. A board that
 -- doubles a duty every time a status is touched is a board nobody believes.
@@ -582,6 +596,105 @@ EXCEPTION WHEN others THEN
 -- ══════════════════════════════════════════════════════════════════════════
 -- RESULTS
 -- ══════════════════════════════════════════════════════════════════════════
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- SECTION G — DEADLINE SEMANTICS ACROSS DAYLIGHT-SAVING TRANSITIONS
+-- ══════════════════════════════════════════════════════════════════════════
+-- Fixed synthetic instants, so the result does not depend on the date the
+-- suite runs or on the cluster/session TimeZone. US transitions in 2026:
+-- spring forward Sunday 8 March, fall back Sunday 1 November.
+-- Calendar units count civil days in the rule's zone; hours are elapsed.
+
+DO $c$ BEGIN
+  INSERT INTO t VALUES ('G','g1_utc_ordinary_date',
+    obligation_due_at(timestamptz '2026-06-01 16:00:00+00', interval '30 days', 'UTC')
+      = timestamptz '2026-07-01 16:00:00+00',
+    'UTC: 30 days = 720 elapsed hours');
+  INSERT INTO t VALUES ('G','g2_utc_window_spanning_us_fall_back',
+    obligation_due_at(timestamptz '2026-10-16 16:00:00+00', interval '30 days', 'UTC')
+      - timestamptz '2026-10-16 16:00:00+00' = interval '30 days',
+    'UTC has no transition: still exactly 720 hours');
+  INSERT INTO t VALUES ('G','g3_new_york_fall_back_counts_calendar_days',
+    obligation_due_at(timestamptz '2026-10-16 16:00:00+00', interval '30 days', 'America/New_York')
+      = timestamptz '2026-11-15 17:00:00+00',
+    '12:00 EDT -> 12:00 EST 30 calendar days later (721 elapsed hours)');
+  INSERT INTO t VALUES ('G','g4_new_york_spring_forward_counts_calendar_days',
+    obligation_due_at(timestamptz '2026-03-01 17:00:00+00', interval '14 days', 'America/New_York')
+      = timestamptz '2026-03-15 16:00:00+00',
+    '12:00 EST -> 12:00 EDT 14 calendar days later (335 elapsed hours)');
+  INSERT INTO t VALUES ('G','g5_new_york_ordinary_date',
+    obligation_due_at(timestamptz '2026-06-01 16:00:00+00', interval '30 days', 'America/New_York')
+      = timestamptz '2026-07-01 16:00:00+00',
+    'no transition in the window: 720 elapsed hours');
+  INSERT INTO t VALUES ('G','g6_hours_are_elapsed_even_across_fall_back',
+    obligation_due_at(timestamptz '2026-10-31 16:00:00+00', interval '72 hours', 'America/New_York')
+      = timestamptz '2026-11-03 16:00:00+00',
+    'a window written in hours is an elapsed duration');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('G','g1_g6_fixed_dst_controls',false,SQLERRM); END $c$;
+
+-- The same inputs must give the same instant whatever the session TimeZone.
+-- This is the property whose absence made a4 depend on the host.
+DO $c$ DECLARE z text; ok boolean := true; ref timestamptz[]; cur timestamptz[];
+               orig text := current_setting('timezone'); BEGIN
+  FOREACH z IN ARRAY ARRAY['UTC','America/New_York','Asia/Kolkata','Australia/Lord_Howe','Pacific/Chatham'] LOOP
+    PERFORM set_config('timezone', z, true);
+    cur := ARRAY[
+      obligation_due_at(timestamptz '2026-10-16 16:00:00+00', interval '30 days', 'America/New_York'),
+      obligation_due_at(timestamptz '2026-03-01 17:00:00+00', interval '14 days', 'America/New_York'),
+      obligation_due_at(timestamptz '2026-10-16 16:00:00+00', interval '1 mon 2 days 03:00', 'UTC')];
+    IF ref IS NULL THEN ref := cur; ELSIF cur IS DISTINCT FROM ref THEN ok := false; END IF;
+  END LOOP;
+  PERFORM set_config('timezone', orig, true);
+  INSERT INTO t VALUES ('G','g7_session_time_zone_does_not_change_deadline', ok,
+    'identical across UTC, New York, Kolkata, Lord Howe and Chatham sessions');
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('G','g7_session_time_zone_does_not_change_deadline',false,SQLERRM); END $c$;
+
+DO $c$ BEGIN
+  BEGIN
+    INSERT INTO obligation_rules (rule_key,description,on_task_kind,generate_on,duty_title,
+      deadline_interval,deadline_time_zone,evidence_requirement,authority,citation,declared_by)
+    VALUES ('zz51.bad_zone','synthetic','review','task_created','synthetic duty',
+      interval '1 day','Not/A_Zone','synthetic','synthetic','synthetic',
+      'a1a1a1a1-0000-0000-0000-00000000a1a1');
+    INSERT INTO t VALUES ('G','g8_unknown_time_zone_rejected',false,'an unknown zone was ACCEPTED');
+  EXCEPTION WHEN others THEN
+    INSERT INTO t VALUES ('G','g8_unknown_time_zone_rejected',true,'rejected: '||SQLSTATE);
+  END;
+END $c$;
+
+-- The generator honours a non-UTC rule zone, from a session in a third zone.
+-- Run inside a block that is rolled back, so no other section sees the rule.
+DO $c$ DECLARE ok boolean := false; detail text := 'not evaluated'; v uuid; BEGIN
+  BEGIN
+    PERFORM set_config('timezone', 'Asia/Kolkata', true);
+    INSERT INTO obligation_rules (rule_key,description,on_task_kind,generate_on,duty_title,
+      deadline_interval,deadline_time_zone,evidence_requirement,authority,citation,declared_by)
+    VALUES ('zz51.ny_review','synthetic rule counted in New York civil days','review','task_created',
+      'synthetic review duty',interval '30 days','America/New_York','synthetic','synthetic','synthetic',
+      'a1a1a1a1-0000-0000-0000-00000000a1a1');
+    INSERT INTO tasks (title,kind,created_by,provenance_basis,owner,visibility,workstream)
+    VALUES ('zz51 synthetic review','review','a1a1a1a1-0000-0000-0000-00000000a1a1',
+            'human_direct','a1a1a1a1-0000-0000-0000-00000000a1a1','shared','alpha')
+    RETURNING id INTO v;
+    SELECT count(*) = 1
+           -- Independent oracle (not obligation_due_at itself): 30 New York civil days.
+           AND bool_and(o.due_at = ((o.generated_at AT TIME ZONE 'America/New_York') + interval '30 days')
+                                   AT TIME ZONE 'America/New_York')
+           AND bool_and(o.due_at = obligation_due_at(o.generated_at, r.deadline_interval, r.deadline_time_zone)),
+           count(*)||' obligation(s); due_at follows the rule zone, not the Kolkata session'
+      INTO ok, detail
+      FROM obligations o JOIN obligation_rules r ON r.id = o.rule_id
+     WHERE o.source_task_id = v AND r.rule_key = 'zz51.ny_review';
+    RAISE EXCEPTION 'zz51_rollback';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'zz51_rollback' THEN ok := false; detail := SQLERRM; END IF;
+  END;
+  INSERT INTO t VALUES ('G','g9_generator_uses_rule_zone_not_session_zone', ok, detail);
+EXCEPTION WHEN others THEN
+  INSERT INTO t VALUES ('G','g9_generator_uses_rule_zone_not_session_zone',false,SQLERRM); END $c$;
+
 SELECT section, test, pass, left(detail,72) AS detail FROM t ORDER BY section, test;
 
 SELECT 'A_controls' AS summary, bool_and(coalesce(pass,false)) AS pass,
@@ -595,7 +708,9 @@ UNION ALL SELECT 'D_legitimate_path', bool_and(coalesce(pass,false)),
 UNION ALL SELECT 'E_rules_are_data', bool_and(coalesce(pass,false)),
        count(*) FILTER (WHERE pass IS NOT TRUE)::text||' failed' FROM t WHERE section='E'
 UNION ALL SELECT 'F_perimeter_posture', bool_and(coalesce(pass,false)),
-       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' failed' FROM t WHERE section='F';
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' failed' FROM t WHERE section='F'
+UNION ALL SELECT 'G_deadline_semantics', bool_and(coalesce(pass,false)),
+       count(*) FILTER (WHERE pass IS NOT TRUE)::text||' failed' FROM t WHERE section='G';
 
 SELECT 'GUARD_no_null_assertions' AS summary,
        coalesce(bool_and(pass IS NOT NULL), false) AS pass,
@@ -605,10 +720,10 @@ SELECT 'GUARD_no_null_assertions' AS summary,
 -- silently produced no rows reads as a section with no failures. Pinning the
 -- count is what makes the two distinguishable.
 SELECT 'GUARD_expected_assertion_count' AS summary,
-       count(*) = 40 AS pass,
-       'ran '||count(*)||' assertions, expected 40' AS detail FROM t;
+       count(*) = 50 AS pass,
+       'ran '||count(*)||' assertions, expected 50' AS detail FROM t;
 
-SELECT CASE WHEN bool_and(coalesce(pass,false)) AND count(*) = 40
+SELECT CASE WHEN bool_and(coalesce(pass,false)) AND count(*) = 50
             THEN 'SUITE_RESULT: PASS' ELSE 'SUITE_RESULT: FAIL' END AS verdict FROM t;
 
 ROLLBACK;

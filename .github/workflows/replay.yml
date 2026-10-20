@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fresh-install replay on an isolated, socket-only PostgreSQL 16 cluster with
+# synthetic fixtures only. No secrets, no network listener, no cloud project.
+# Runs twice: UTC and America/New_York. The cluster TimeZone is inherited from
+# TZ and recorded, never forced; the suite must pass in both. Deadline
+# semantics across daylight-saving transitions are covered by fixed-date
+# controls in tests/51_derived_obligations.sql (section G), so the result does
+# not depend on the date the job runs.
+name: Fresh-install replay
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: replay-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    name: Replay (PostgreSQL 16, ${{ matrix.tz }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        tz: [UTC, America/New_York]
+    steps:
+      - name: Check out exact head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install PostgreSQL 16 and pgvector
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends postgresql-16 postgresql-16-pgvector
+          echo /usr/lib/postgresql/16/bin >> "$GITHUB_PATH"
+
+      - name: Replay from an empty database and run every scored suite
+        env:
+          TZ: ${{ matrix.tz }}
+          REPLAY_PORT: "55433"
+        run: |
+          set -uo pipefail
+          unset PGTZ
+          git rev-parse HEAD
+          bash tests/replay_fresh_install.sh
+
+      - name: Confirm no cluster or work directory remains
+        if: always()
+        run: |
+          if pgrep -u "$(id -u)" -f 'postgres.*55433' >/dev/null; then echo "replay cluster still running"; exit 1; fi
+          if ls -d "${RUNNER_TEMP:-/tmp}"/svreplay.* /tmp/svreplay.* 2>/dev/null | grep -q .; then echo "replay work directory remains"; exit 1; fi
+          echo "cleanup verified: no replay cluster process, no work directory"

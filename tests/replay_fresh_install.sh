@@ -27,27 +27,34 @@ export LC_ALL="${LC_ALL:-C}"
 
 SQL_DIR="${1:-$(cd "$(dirname "$0")/../sql" && pwd)}"
 PORT="${REPLAY_PORT:-5433}"
-PGDATA_DIR="${REPLAY_PGDATA:-/tmp/svreplay_pgdata}"
-SOCK_DIR="${REPLAY_SOCK:-/tmp/svreplay_sock}"
+# Every path this run creates lives under one private work directory, so two
+# replays on one host cannot collide and nothing is left in a shared /tmp.
+# REPLAY_PGDATA / REPLAY_SOCK still override the cluster paths; REPLAY_LOG_DIR
+# keeps the initdb/server logs after exit (by default they are removed).
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/svreplay.XXXXXX")" || { echo "mktemp FAILED"; exit 1; }
+PGDATA_DIR="${REPLAY_PGDATA:-$WORK_DIR/pgdata}"
+SOCK_DIR="${REPLAY_SOCK:-$WORK_DIR/sock}"
+LOG_DIR="${REPLAY_LOG_DIR:-$WORK_DIR/logs}"
 DB="svreplay"
 
 cleanup() {
   pg_ctl -D "$PGDATA_DIR" stop -m fast >/dev/null 2>&1 || true
-  rm -rf "$PGDATA_DIR" "$SOCK_DIR"
+  rm -rf "$PGDATA_DIR" "$SOCK_DIR" "$WORK_DIR"
 }
 trap cleanup EXIT
 
 echo "== initializing isolated cluster =="
 rm -rf "$PGDATA_DIR" "$SOCK_DIR"
-mkdir -p "$SOCK_DIR"
-initdb -D "$PGDATA_DIR" >/tmp/svreplay_initdb.log 2>&1 || { echo "initdb FAILED, see /tmp/svreplay_initdb.log"; exit 1; }
+mkdir -p "$SOCK_DIR" "$LOG_DIR"
+initdb -D "$PGDATA_DIR" >"$LOG_DIR/initdb.log" 2>&1 || { echo "initdb FAILED:"; tail -20 "$LOG_DIR/initdb.log"; exit 1; }
 pg_ctl -D "$PGDATA_DIR" \
   -o "-p $PORT -k $SOCK_DIR -c listen_addresses=''" \
-  -l /tmp/svreplay_server.log start >/dev/null || { echo "server start FAILED, see /tmp/svreplay_server.log"; exit 1; }
-sleep 2
+  -l "$LOG_DIR/server.log" -w start >/dev/null || { echo "server start FAILED:"; tail -20 "$LOG_DIR/server.log"; exit 1; }
 
 export PGHOST="$SOCK_DIR" PGPORT="$PORT"
 createdb "$DB" || { echo "createdb FAILED"; exit 1; }
+# Recorded, never forced: the suite must pass in whatever zone the host uses.
+echo "  cluster TimeZone: $(psql -d "$DB" -t -A -c 'show timezone')  server: $(psql -d "$DB" -t -A -c 'show server_version')"
 
 echo "== applying $SQL_DIR in numeric order =="
 FAILED=0
